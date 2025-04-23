@@ -74,10 +74,6 @@ const {
   minimizeWindow,
 } = require('./common/utils');
 
-// --- MODIFICACIÓN: Importar la nueva función de autenticación ---
-const { startServerAuth } = require('./serverAuth');
-// --- FIN MODIFICACIÓN ---
-
 const { ipcRenderer } = electron;
 const { app } = electron.remote;
 const assistantWindow = electron.remote.getCurrentWindow();
@@ -125,11 +121,6 @@ ipcRenderer.send('update-first-launch');
 
 // Assuming as first-time user
 let isFirstTimeUser = true;
-
-// --- MODIFICACIÓN: Comprobar si ya está logueado (opcional, depende de cómo maneje serverAuth el estado) ---
-// const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
-// console.log('Is logged in (from localStorage):', isLoggedIn);
-// --- FIN MODIFICACIÓN ---
 
 // Check Microphone Access
 let canAccessMicrophone = true;
@@ -291,7 +282,6 @@ else {
       </div>
     `;
 
-    // --- MODIFICACIÓN: Cambiar acción del botón Proceed ---
     suggestionArea.querySelector('#proceed-btn').onclick = () => {
       // Set assistant's language to system language
       const systemLanguage = navigator.language;
@@ -300,23 +290,17 @@ else {
         assistantConfig.language = systemLanguage;
       }
 
-      // Write the config (Puede que quieras mover esto a después de la autenticación exitosa)
+      // Write the config
       fs.writeFile(configFilePath, JSON.stringify(assistantConfig), () => {
         console.log('Config File was added to userData path');
       });
 
-      // Iniciar el flujo de autenticación del servidor en lugar de relanzar
-      console.log('First time user proceeding to server authentication...');
-      startServerAuth();
-
-      // Ya no relanzamos aquí directamente
-      // relaunchAssistant();
+      relaunchAssistant();
     };
-    // --- FIN MODIFICACIÓN ---
   };
 
   // If the user is opening the app for the first time,
-  // throw `Exception` to prevent Assistant initialization until setup/login is done
+  // throw `Exception` to prevent Assistant initialization
 
   if (isFirstTimeUser) {
     // Disable settings button
@@ -455,10 +439,6 @@ updaterRenderer.autoDownloadUpdates = assistantConfig.autoDownloadUpdates;
 
 const config = {
   auth: {
-    // --- MODIFICACIÓN: Key file y tokens path podrían ser menos relevantes para el login inicial ---
-    // La librería podría aún usarlos internamente o necesitar placeholders.
-    // O, podría necesitar una configuración de auth completamente diferente para flujo de servidor.
-    // Por ahora, los mantenemos pero la lógica de error inicial y showGetTokenScreen cambian.
     keyFilePath: assistantConfig['keyFilePath'],
     // where you want the tokens to be saved
     // will create the directory if not already there
@@ -466,11 +446,7 @@ const config = {
     savedTokensPath: !firstLaunch
       ? assistantConfig['savedTokensPath']
       : undefined,
-    // --- FIN MODIFICACIÓN ---
-
-    // --- MODIFICACIÓN: tokenInput ahora llama a la función que inicia el flujo del servidor ---
-    tokenInput: showGetTokenScreen, // Esta función ahora llama a startServerAuth
-    // --- FIN MODIFICACIÓN ---
+    tokenInput: showGetTokenScreen,
   },
   // this param is optional, but all options will be shown
   conversation: {
@@ -493,75 +469,6 @@ const config = {
 
 let assistant;
 
-// --- MODIFICACIÓN: Ajustar la pantalla inicial si no hay autenticación ---
-// Verificar si el keyFilePath está vacío podría ser un indicador
-// de que se necesita iniciar sesión a través del servidor.
-if (assistantConfig['keyFilePath'] === '' && localStorage.getItem('isLoggedIn') !== 'true') {
-  // Si no hay archivo de clave Y no estamos logueados (según serverAuth)
-  // Mostrar pantalla para iniciar sesión.
-
-  mainArea.innerHTML = `
-    <div class="fade-in-from-bottom">
-      <div style="margin: 30px 10px 8px 10px;">
-        <div style="
-          font-size: 30px;
-          margin-top: 30px;
-        ">
-          Login Required
-        </div>
-        <div style="
-          font-size: 21px;
-          opacity: 0.502;
-        ">
-          Please login to use Google Assistant.
-        </div>
-      </div>
-      <div class="no-auth-grid">
-        <div class="no-auth-grid-icon">
-          <img src="../res/auth.svg" alt="Auth" />
-        </div>
-        <div class="no-auth-grid-info">
-          <div>
-            Click the button below to login via the server.
-          </div>
-          <!-- Quitar detalles sobre Device Registration si ya no aplica -->
-        </div>
-      </div>
-    </div>
-  `;
-
-  const suggestionParent = document.querySelector('.suggestion-parent');
-  // Quitar enlace a wiki de autenticación si ya no es el método principal
-  // const documentationLink = `${repoUrl}/wiki/Setup-Authentication-for-Google-Assistant-Unofficial-Desktop-Client`;
-
-  suggestionParent.innerHTML = `
-    <div
-      class="suggestion"
-      onclick="startServerAuth()"
-    >
-      <span>
-        <img src="../res/login.svg" style=" /* Reemplaza con un icono adecuado */
-          height: 15px;
-          width: 15px;
-          vertical-align: text-top;
-          padding-right: 5px;
-          padding-top: 2px;
-          ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-        >
-      </span>
-      Login with Server
-    </div>
-  `;
-
-  assistantMicrophone.id = '';
-  assistantMicrophone.classList.add('assistant-mic-disabled');
-
-  // Detener la inicialización adicional del asistente si no estamos autenticados
-  throw new Error("Authentication required via server. Halting assistant init.");
-
-}
-// --- FIN MODIFICACIÓN ---
-
 try {
   assistant = new GoogleAssistant(config.auth);
 }
@@ -569,55 +476,74 @@ catch (err) {
   console.group(...consoleMessage('Assistant Initialization failed', 'error'));
   console.error(err);
 
-  // --- MODIFICACIÓN: Simplificar manejo de errores iniciales si dependen del key file obsoleto ---
-  // Si el error es por el key file, guiar al login del servidor en lugar de configurar archivos.
-  if (err.message.startsWith('Cannot find module') || err.name === 'TypeError') {
-      console.log('Auth file error, but attempting server auth flow.');
-      displayErrorScreen({
-          title: 'Authentication Setup Needed',
-          details: 'Could not initialize using local files. Please login using the server method.',
-          subdetails: `Original Error: ${err.message}`, // Opcional: mostrar error original
-      });
+  if (err.message.startsWith('Cannot find module')) {
+    // Auth file does not exist
+    console.log('Auth does not exist!!');
 
-      const suggestionParent = document.querySelector('.suggestion-parent');
-      suggestionParent.innerHTML = `
-        <div class="suggestion" onclick="startServerAuth()">
-          <span>
-            <img src="../res/login.svg" style=" /* Icono adecuado */
-              height: 20px;
-              width: 20px;
-              vertical-align: top;
-              padding-right: 10px;
-              ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-            >
-          </span>
-          Login with Server
-        </div>
-        <div class="suggestion" onclick="openConfig()">
-          <span>
-            <img src="../res/settings.svg" style="
-              height: 20px;
-              width: 20px;
-              vertical-align: top;
-              padding-right: 10px;
-              ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-            >
-          </span>
-          Open Settings (Advanced)
-        </div>
-      `;
+    displayErrorScreen({
+      title: 'Authentication Failure',
+      details:
+        'The Key file provided either does not exist or is not accessible. Please check the path to the file.',
+      subdetails: 'Error: Key file not found',
+    });
+
+    const suggestionParent = document.querySelector('.suggestion-parent');
+
+    suggestionParent.innerHTML = `
+      <div class="suggestion" onclick="openConfig()">
+        <span>
+          <img src="../res/settings.svg" style="
+            height: 20px;
+            width: 20px;
+            vertical-align: top;
+            padding-right: 10px;
+            ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+          >
+        </span>
+        Open Settings
+      </div>
+    `;
   }
-  // --- FIN MODIFICACIÓN ---
+  else if (err.name === 'TypeError') {
+    // Invalid Auth file
+    console.log('Auth is INVALID');
+
+    displayErrorScreen({
+      title: 'Authentication Failure',
+      details:
+        'The Key file provided is not valid. Make sure the file is of the form "client_secret_&lt;your_id&gt;.apps.googleusercontent.com.json"',
+      subdetails: 'Error: Invalid Key file',
+    });
+
+    const suggestionParent = document.querySelector('.suggestion-parent');
+
+    suggestionParent.innerHTML = `
+      <div class="suggestion" onclick="openConfig()">
+        <span>
+          <img src="../res/settings.svg" style="
+            height: 20px;
+            width: 20px;
+            vertical-align: top;
+            padding-right: 10px;
+            ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+          >
+        </span>
+        Open Settings
+      </div>
+    `;
+  }
   else {
-    // Unexpected Error (mantener manejo genérico)
+    // Unexpected Error
+
     displayErrorScreen({
       title: 'Unexpected Exception Occurred',
       details:
         'The Assistant failed to initialize due to some unexpected error. Try reloading the assistant.',
-      subdetails: `Error: ${err.name} - ${err.message}`, // Añadir más detalles
+      subdetails: 'Error: Assistant init failed',
     });
 
     const suggestionParent = document.querySelector('.suggestion-parent');
+
     suggestionParent.innerHTML = `
       <div class="suggestion" onclick="relaunchAssistant()">
         <span>
@@ -633,11 +559,81 @@ catch (err) {
       </div>
     `;
   }
+
   console.groupEnd();
-  // Detener ejecución si hubo error de inicialización
-  throw new Error("Assistant initialization failed.");
 }
 
+if (assistantConfig['keyFilePath'] === '') {
+  // If no Auth File is provided, show getting started screen
+
+  mainArea.innerHTML = `
+    <div class="fade-in-from-bottom">
+      <div style="margin: 30px 10px 8px 10px;">
+        <div style="
+          font-size: 30px;
+          margin-top: 30px;
+        ">
+          Hey, there!
+        </div>
+        <div style="
+          font-size: 21px;
+          opacity: 0.502;
+        ">
+          You don't seem to have an Authentication File...
+        </div>
+      </div>
+      <div class="no-auth-grid">
+        <div class="no-auth-grid-icon">
+          <img src="../res/auth.svg" alt="Auth" />
+        </div>
+        <div class="no-auth-grid-info">
+          <div>
+            To use this Google Assistant Desktop Client:
+          </div>
+
+          <ol style="padding-left: 30px; opacity: 0.502;">
+            <li>You must complete the Device Registration process</li>
+            <li>Download the required Authentication File - OAuth 2 credentials.</li>
+            <li>Go to "Settings" in the top left corner and set the "Key File Path" to the location where the file is downloaded.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const suggestionParent = document.querySelector('.suggestion-parent');
+  const documentationLink = `${repoUrl}/wiki/Setup-Authentication-for-Google-Assistant-Unofficial-Desktop-Client`;
+
+  suggestionParent.innerHTML = `
+    <span style="
+      opacity: 0.502;
+      margin-right: 5px;
+      font-size: 18px;
+    ">
+      How to register your device?
+    </span>
+
+    <div
+      class="suggestion"
+      onclick="openLink('${documentationLink}')"
+    >
+      <span>
+        <img src="../res/open_link.svg" style="
+          height: 15px;
+          width: 15px;
+          vertical-align: text-top;
+          padding-right: 5px;
+          padding-top: 2px;
+          ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+        >
+      </span>
+      Check out this wiki
+    </div>
+  `;
+
+  assistantMicrophone.id = '';
+  assistantMicrophone.classList.add('assistant-mic-disabled');
+}
 
 // starts a new conversation with the assistant
 const startConversation = (conversation) => {
@@ -753,25 +749,50 @@ const startConversation = (conversation) => {
         suggestionArea.innerHTML = '<div class="suggestion-parent"></div>';
         const suggestionParent = document.querySelector('.suggestion-parent');
 
-        // --- MODIFICACIÓN: Manejar invalid_grant redirigiendo al login del servidor ---
-        if (error.details?.includes('invalid_grant')) {
-          // Limpiar estado de login local si existe
-          localStorage.removeItem('isLoggedIn');
+        if (error.details.includes('invalid_grant')) {
+          const savedTokenContent = fs.readFileSync(assistantConfig.savedTokensPath);
+          const savedTokenJson = JSON.parse(savedTokenContent);
+          const savedTokenExpiryTimestamp = savedTokenJson?.['expiry_date'];
 
-          displayErrorScreen({
-            icon: {
-              path: '../res/auth_expired.svg', // O un icono de login
-              style: 'margin-top: -5px;',
-            },
-            title: 'Authentication Required',
-            details: 'Your session has expired or is invalid. Please login again.',
-            subdetails: `Error: ${error.details}`,
-          });
+          // Check if the tokens have expired
+          if (savedTokenExpiryTimestamp <= Date.now()) {
+            const savedTokenExpiryDateFormatted = new Intl.DateTimeFormat('en-US', {
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric',
+              hour: 'numeric',
+              minute: 'numeric',
+              second: 'numeric',
+            }).format(savedTokenExpiryTimestamp);
 
-          suggestionParent.innerHTML = `
-            <div class="suggestion" onclick="startServerAuth()">
+            displayErrorScreen({
+              icon: {
+                path: '../res/auth_expired.svg',
+                style: 'margin-top: -5px;',
+              },
+              title: 'Access Tokens Expired',
+              details:
+                `Your access tokens expired on ${savedTokenExpiryDateFormatted}. Reset your tokens to get a new one.`,
+              subdetails: `Error: ${error.details}`,
+            });
+          }
+          else {
+            displayErrorScreen({
+              icon: {
+                path: '../res/offline_icon.svg',
+                style: 'margin-top: -5px;',
+              },
+              title: 'Auth Error',
+              details:
+                'Your tokens seem to be invalidated. Reset your tokens and get a new one or manually set the Saved Tokens Path',
+              subdetails: `Error: ${error.details}`,
+            });
+          }
+
+          suggestionParent.innerHTML += `
+            <div class="suggestion" onclick="resetSavedTokensFile()">
               <span>
-                <img src="../res/login.svg" style=" /* Icono adecuado */
+                <img src="../res/refresh.svg" style="
                   height: 20px;
                   width: 20px;
                   vertical-align: top;
@@ -779,25 +800,24 @@ const startConversation = (conversation) => {
                   ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
                 >
               </span>
-              Login Again
+              Reset Tokens
             </div>
-            <div class="suggestion" onclick="openConfig()">
-               <span>
-                 <img src="../res/settings.svg" style="
-                   height: 20px;
-                   width: 20px;
-                   vertical-align: top;
-                   padding-right: 5px;
-                   ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-                 >
-               </span>
-              Open Settings (Advanced)
-             </div>
-           `;
+            <div class="suggestion" onclick="openConfig('saved-tokens-path')">
+              <span>
+                <img src="../res/troubleshoot.svg" style="
+                  height: 20px;
+                  width: 20px;
+                  vertical-align: top;
+                  padding-right: 5px;
+                  ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+                >
+              </span>
+              Set Saved Tokens Path
+            </div>
+          `;
         }
-        // --- FIN MODIFICACIÓN ---
-        else if (error.code === 14) { // Offline Error
-          if (!error.details?.includes('No access or refresh token is set')) {
+        else if (error.code === 14) {
+          if (!error.details.includes('No access or refresh token is set')) {
             displayErrorScreen({
               icon: {
                 path: '../res/offline_icon.svg',
@@ -845,8 +865,7 @@ const startConversation = (conversation) => {
               `;
           }
 
-          // Mantener el botón de reintentar
-           suggestionParent.innerHTML = `
+          suggestionParent.innerHTML = `
             <div class="suggestion" onclick="retryRecent(false)">
               <span>
                 <img src="../res/refresh.svg" style="
@@ -859,146 +878,86 @@ const startConversation = (conversation) => {
               </span>
               Retry
             </div>
-             ${suggestionParent.innerHTML}
-           `;
 
-          // --- MODIFICACIÓN: Añadir opción de re-login si el error es por falta de token y estamos offline ---
-          if (error.details?.includes('No access or refresh token is set')) {
-              displayErrorScreen({
-                 icon: {
-                   path: '../res/offline_icon.svg', // O un icono de login/error
-                   style: 'margin-top: -5px;',
-                 },
-                 title: 'Login Needed or Offline',
-                 details: 'Could not authenticate. Check your internet connection or try logging in again.',
-                 subdetails: `Error: ${error.details}`,
-               });
-               suggestionParent.innerHTML = `
-               <div class="suggestion" onclick="startServerAuth()">
-                 <span>
-                   <img src="../res/login.svg" style=" /* Icono login */
-                     height: 20px;
-                     width: 20px;
-                     vertical-align: top;
-                     padding-right: 5px;
-                     ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-                   >
-                 </span>
-                 Login Again
-               </div>
-               ${suggestionParent.innerHTML}  /* Mantener Retry y Network Prefs */
-              `;
-          }
-          // --- FIN MODIFICACIÓN ---
-
+            ${suggestionParent.innerHTML}
+          `;
         }
-         // --- MODIFICACIÓN: Manejar error de token inválido (código 3 podría ser, verificar) ---
-        else if (error.code === 3 /* || other relevant codes */) {
-            if (error.details?.includes('No access or refresh token is set')) {
-                 // Limpiar estado de login local si existe
-                localStorage.removeItem('isLoggedIn');
-
-                displayErrorScreen({
-                    title: 'Authentication Problem',
-                    details: 'There was an issue with your login session. Please login again.',
-                    subdetails: 'Error: No access or refresh token is set',
-                });
-
-                const suggestionParent = document.querySelector('.suggestion-parent');
-                suggestionParent.innerHTML = `
-                    <div class="suggestion" onclick="startServerAuth()">
-                        <span>
-                            <img src="../res/login.svg" style=" /* Icono login */
-                                height: 20px;
-                                width: 20px;
-                                vertical-align: top;
-                                padding-right: 10px;
-                                ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-                            >
-                        </span>
-                        Login Again
-                    </div>
-                `;
-            } else if (error.details?.includes('unsupported language_code')) {
-              // Unsupported language code (mantener como estaba)
-              const suggestionParent = document.querySelector('.suggestion-parent');
-              displayErrorScreen({
-                title: 'Invalid Language Code',
-                details: `The language code "${assistantConfig.language}" is unsupported as of now.`,
-                subdetails: `Error: ${error.details}`,
-              });
-              suggestionParent.innerHTML = `
-                <div class="suggestion" onclick="openConfig('language')">
-                  <span>
-                    <img src="../res/troubleshoot.svg" style="
-                      height: 20px;
-                      width: 20px;
-                      vertical-align: top;
-                      padding-right: 5px;
-                      ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-                    >
-                  </span>
-                  Set Language
-                </div>
-                <div
-                  class="suggestion"
-                  onclick="openLink('https://developers.google.com/assistant/sdk/reference/rpc/languages')"
-                >
-                  Track language support
-                </div>
-                ${suggestionParent.innerHTML}
-              `;
-            } else {
-                 // Otro error de código 3 genérico
-                 displayErrorScreen({
-                     title: 'Conversation Error',
-                     details: 'An error occurred during the conversation.',
-                     subdetails: `Error: ${error.message} (Code: ${error.code})`,
-                 });
-                  // Podrías añadir un botón de reintento genérico
-                  suggestionParent.innerHTML = `
-                   <div class="suggestion" onclick="retryRecent(false)">
-                     <span>
-                       <img src="../res/refresh.svg" style="
-                         height: 20px;
-                         width: 20px;
-                         vertical-align: top;
-                         padding-right: 5px;
-                         ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-                       >
-                     </span>
-                     Retry
-                   </div>
-                  `;
-            }
-        }
-        // --- FIN MODIFICACIÓN ---
         else {
-          // Otros errores genéricos
+          // Invalid Saved Tokens
+
           displayErrorScreen({
-            title: 'Unexpected Conversation Error',
-            details: 'An unexpected error occurred.',
-            subdetails: `Error: ${error.message} (Code: ${error.code})`,
+            title: 'Invalid Tokens!',
+            details: `${
+              assistantConfig['savedTokensPath'] === ''
+                ? "No Token file was provided. Please provide a Token file in the settings under 'Saved Token Path'."
+                : "The Token file provided is not valid. Please check the path under 'Saved Token Path' in settings."
+            }`,
+            subdetails: 'Error: No access or refresh token is set',
           });
-           suggestionParent.innerHTML = `
-            <div class="suggestion" onclick="retryRecent(false)">
+
+          // eslint-disable-next-line no-shadow
+          const suggestionParent = document.querySelector('.suggestion-parent');
+
+          suggestionParent.innerHTML = `
+            <div class="suggestion" onclick="openConfig()">
               <span>
-                <img src="../res/refresh.svg" style="
+                <img src="../res/settings.svg" style="
                   height: 20px;
                   width: 20px;
                   vertical-align: top;
-                  padding-right: 5px;
+                  padding-right: 10px;
                   ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
                 >
               </span>
-              Retry
+              Open Settings
             </div>
-           `;
+          `;
         }
       }
-      // Código existente para detener loader y micrófono
+      else if (error.code === 3) {
+        if (error.details.includes('unsupported language_code')) {
+          // Unsupported language code
+
+          const suggestionParent = document.querySelector('.suggestion-parent');
+
+          displayErrorScreen({
+            title: 'Invalid Language Code',
+            details: `The language code "${assistantConfig.language}" is unsupported as of now.`,
+            subdetails: `Error: ${error.details}`,
+          });
+
+          suggestionParent.innerHTML = `
+            <div class="suggestion" onclick="openConfig('language')">
+              <span>
+                <img src="../res/troubleshoot.svg" style="
+                  height: 20px;
+                  width: 20px;
+                  vertical-align: top;
+                  padding-right: 5px;
+                  ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+                >
+              </span>
+              Set Language
+            </div>
+
+            <div
+              class="suggestion"
+              onclick="openLink('https://developers.google.com/assistant/sdk/reference/rpc/languages')"
+            >
+              Track language support
+            </div>
+
+            ${suggestionParent.innerHTML}
+          `;
+        }
+      }
+
       historyHead = history.length;
+
+      // Deactivate the `loading bar`
       deactivateLoader();
+
+      // Stop Microphone
       stopMic();
     });
 };
@@ -1008,19 +967,9 @@ const startConversation = (conversation) => {
 assistant
   .on('ready', () => {
     isAssistantReady = true;
-    console.log(...consoleMessage('Assistant Ready!'));
-     // --- MODIFICACIÓN: Opcional: Verificar estado de login al estar listo ---
-    // Si usas localStorage, podrías re-verificar aquí
-    // const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
-    // if (!isLoggedIn && !document.querySelector('.error-area')) { // Evitar si ya hay error
-    //    console.warn("Assistant ready but user not logged in according to localStorage.");
-        // Podrías mostrar un mensaje o intentar el login de nuevo
-        // startServerAuth();
-    // }
-    // --- FIN MODIFICACIÓN ---
   })
   .on('started', (conversation) => {
-    console.log(...consoleMessage('Assistant Started Conversation!'));
+    console.log(...consoleMessage('Assistant Started!'));
     startConversation(conversation);
 
     // Stop Assistant Response Playback
@@ -1106,12 +1055,7 @@ assistant
     }
   })
   .on('error', (err) => {
-    // --- MODIFICACIÓN: Generalizar el manejo de error global si es de autenticación ---
-    // Este error handler es más genérico, el específico de la conversación ya se modificó.
-    // Si el error aquí también es claramente de autenticación (difícil saber sin probar),
-    // podríamos redirigir a startServerAuth() aquí también. Por ahora, mantenemos el
-    // comportamiento existente pero podríamos considerar cambiarlo.
-    console.group(...consoleMessage('Error thrown by Assistant (Global Handler)', 'error'));
+    console.group(...consoleMessage('Error thrown by Assistant', 'error'));
     console.error(err);
     console.groupEnd();
 
@@ -1120,46 +1064,7 @@ assistant
       ...document.querySelectorAll('.suggestion-parent > .suggestion'),
     ].map((btn) => btn.onclick);
 
-    // Comprobar si el error sugiere un problema de autenticación que el servidor podría resolver
-    const isLikelyAuthError = err.message?.includes('token') || err.message?.includes('auth');
-
-    if (isLikelyAuthError && localStorage.getItem('isLoggedIn') !== 'true') {
-        // Si parece error de auth y no estamos logueados, ofrecer login
-        displayErrorScreen({
-            title: 'Authentication Error',
-            details: 'An authentication error occurred. Please try logging in again.',
-            subdetails: `Error: ${err.message}`,
-        });
-
-        const suggestionParent = document.querySelector('.suggestion-parent');
-        suggestionParent.innerHTML = `
-            <div class="suggestion" onclick="startServerAuth()">
-                <span>
-                    <img src="../res/login.svg" style=" /* Icono login */
-                        height: 20px;
-                        width: 20px;
-                        vertical-align: top;
-                        padding-right: 10px;
-                        ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-                    >
-                </span>
-                Login Again
-            </div>
-            <div class="suggestion" onclick="relaunchAssistant()">
-                 <span>
-                   <img src="../res/refresh.svg" style="
-                     height: 20px;
-                     width: 20px;
-                     vertical-align: top;
-                     padding-right: 5px;
-                     ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
-                   >
-                 </span>
-                 Relaunch Assistant
-             </div>
-        `;
-    } else {
-      // Mantener el manejo de error genérico existente
+    if (assistantConfig['savedTokensPath'] !== '') {
       displayErrorScreen({
         title: 'Unexpected Exception Occurred',
         details: 'An unexpected error occurred.',
@@ -1168,9 +1073,38 @@ assistant
 
       historyHead = history.length;
 
-      const closeCurrentScreen = () => { /* ... código existente ... */ };
+      const closeCurrentScreen = () => {
+        const currentDOM = parser.parseFromString(currentHTML, 'text/html');
+        console.log('Current DOM', currentDOM);
+
+        if (currentDOM.querySelector('.assistant-markup-response')) {
+          mainArea.innerHTML = displayScreenData(history[historyHead - 1]['screen-data']);
+        }
+        else {
+          mainArea.innerHTML = currentDOM.querySelector('#main-area').innerHTML;
+        }
+
+        suggestionArea.innerHTML = currentDOM.querySelector(
+          '#suggestion-area',
+        ).innerHTML;
+
+        const suggestions = [
+          ...document.querySelectorAll('.suggestion-parent > .suggestion'),
+        ];
+
+        suggestionOnClickListeners.forEach((listener, suggestionIndex) => {
+          suggestions[suggestionIndex].onclick = listener;
+        });
+
+        historyHead--;
+
+        if (historyHead === -1) {
+          document.querySelector('.app-title').innerText = '';
+        }
+      };
 
       const suggestionParent = document.querySelector('.suggestion-parent');
+
       suggestionParent.innerHTML = `
         <div class="suggestion" onclick="relaunchAssistant()">
           <span>
@@ -1188,12 +1122,36 @@ assistant
           Ignore
         </div>
       `;
-      document.querySelector('#ignore-btn').onclick = closeCurrentScreen;
 
-      // Eliminar el bloque else específico para 'No tokens specified' si ya no aplica
-      // if (assistantConfig['savedTokensPath'] !== '') { ... } else { ... }
+      document.querySelector('#ignore-btn').onclick = closeCurrentScreen;
     }
-    // --- FIN MODIFICACIÓN ---
+    else {
+      // No tokens specified
+
+      displayErrorScreen({
+        title: 'Tokens not found!',
+        details:
+          "No Token file was provided. Please provide a Token file in the settings under 'Saved Token Path'.",
+        subdetails: 'Error: No access or refresh token is set',
+      });
+
+      const suggestionParent = document.querySelector('.suggestion-parent');
+
+      suggestionParent.innerHTML = `
+        <div class="suggestion" onclick="openConfig()">
+          <span>
+            <img src="../res/settings.svg" style="
+              height: 20px;
+              width: 20px;
+              vertical-align: top;
+              padding-right: 10px;
+              ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+            >
+          </span>
+          Open Settings
+        </div>
+      `;
+    }
 
     setTimeout(deactivateLoader, 200);
   });
@@ -1258,10 +1216,7 @@ function inspectResponseType(assistantResponseString) {
     'here\'s a matching wikipedia result',
   ];
 
-  // Fix: Check if mainArea.innerText exists before accessing it
-  const mainAreaText = mainArea?.innerText || '';
-  const isGoogleSearchPrompt = googleSearchPrompts.includes(mainAreaText.toLowerCase());
-
+  const isGoogleSearchPrompt = googleSearchPrompts.includes(mainArea.innerText.toLowerCase());
 
   let type;
   let searchResultParts;
@@ -1435,16 +1390,12 @@ async function openConfig(configItem = null) {
 
         <div style="padding: 20px 0">
           <div class="setting-label">
-            AUTHENTICATION (Advanced) <!-- MODIFICACIÓN: Etiqueta opcional -->
+            AUTHENTICATION
             <hr />
-          </div>
-          <!-- MODIFICACIÓN: Añadir nota sobre la relevancia -->
-          <div style="opacity: 0.7; margin: -10px 10px 15px 10px; font-size: 0.9em;">
-             Note: These paths might be less relevant if using server-based login exclusively.
           </div>
           <div id="config-item__key-file-path" class="setting-item">
             <div class="setting-key">
-              Key File Path (Optional) <!-- MODIFICACIÓN -->
+              Key File Path
 
               <span style="
                 vertical-align: sub;
@@ -1452,7 +1403,7 @@ async function openConfig(configItem = null) {
               ">
                 <img
                   src="../res/help.svg"
-                  title="Your OAuth 2 Credentials.\nFile: 'client_secret_&lt;your_id&gt;.apps.googleusercontent.com.json'\n(May not be required for server login)"
+                  title="Your OAuth 2 Credentials.\nFile: 'client_secret_&lt;your_id&gt;.apps.googleusercontent.com.json'"
                 >
               </span>
             </div>
@@ -1465,7 +1416,7 @@ async function openConfig(configItem = null) {
           </div>
           <div id="config-item__saved-tokens-path" class="setting-item">
             <div class="setting-key">
-              Saved Tokens Path (Optional) <!-- MODIFICACIÓN -->
+              Saved Tokens Path
 
               <span style="
                 vertical-align: sub;
@@ -1473,7 +1424,7 @@ async function openConfig(configItem = null) {
               ">
                 <img
                   src="../res/help.svg"
-                  title="The Token file previously provided by Google.\nFile: 'tokens.json'\n(May not be used by server login)"
+                  title="The Token file provided by Google.\nFile: 'tokens.json'"
                 >
               </span>
             </div>
@@ -1484,7 +1435,6 @@ async function openConfig(configItem = null) {
               </label>
             </div>
           </div>
-          <!-- FIN MODIFICACIÓN -->
           <div class="setting-label">
             CONVERSATION
             <hr />
@@ -2182,8 +2132,6 @@ async function openConfig(configItem = null) {
             FEEDBACK & LINKS
             <hr />
           </div>
-          <!-- MODIFICACIÓN: Ocultar o cambiar la guía de autenticación si ya no aplica -->
-          <!--
           <div id="config-item__link-setup-auth-wiki" class="setting-item">
             <div class="setting-key">
               How to setup authentication?
@@ -2203,8 +2151,6 @@ async function openConfig(configItem = null) {
               </label>
             </div>
           </div>
-          -->
-          <!-- FIN MODIFICACIÓN -->
           <div id="config-item__link-faq" class="setting-item">
             <div class="setting-key">
               Stuck on an issue?
@@ -2404,16 +2350,304 @@ async function openConfig(configItem = null) {
       </div>
     `;
 
-    // --- Resto del código de openConfig (banners, manejo de fallbacks, etc.) ---
-    // ... (código existente para configNotice, fallbackMode, mic inaccessible) ...
     const configNotice = mainArea.querySelector('#config-notice-parent');
-    // ... (código para banners, fallback, mic, etc.) ...
 
+    if (flags.displayPostUpdateBanner && sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateNotAvailable) {
+      configNotice.style.display = 'block';
+      const postUpdateBannerParent = document.createElement('div');
 
-    // --- Obtener referencias a elementos (código existente) ---
+      postUpdateBannerParent.innerHTML = `
+        <div id="config-banner__assistant-updated" class="config-banner">
+          <div class="config-banner-main">
+            <div style="margin-top: 4px;">
+              <img src="../res/update.svg" style="
+                height: 1.2rem;
+                width: 1.2rem;
+                ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}
+              ">
+            </div>
+            <div style="
+              display: flex;
+              flex-direction: column;
+              gap: 10px;
+            ">
+              <h1>Assistant was updated!</h1>
+              <p>
+                See what's new in <strong>${getVersion()}</strong>
+              </p>
+            </div>
+          </div>
+
+          <div class="config-banner-actions">
+            <button
+              id="changelog-banner-dismiss-btn"
+              class="ico-btn"
+              style="display: flex;"
+              title="Dismiss"
+            >
+              <img
+                type="icon"
+                src="../res/close_btn.svg"
+                alt="Dismiss"
+                style="${getEffectiveTheme() === 'dark' ? 'filter: invert(1);' : ''}"
+              />
+            </button>
+          </div>
+        </div>
+      `;
+
+      // Append the banner to the config notice
+      configNotice.appendChild(postUpdateBannerParent);
+
+      /** @type {HTMLDivElement} */
+      const postUpdateBanner = postUpdateBannerParent.querySelector('#config-banner__assistant-updated');
+
+      /** @type {HTMLButtonElement} */
+      const postUpdateBannerDismissButton = postUpdateBanner.querySelector('#changelog-banner-dismiss-btn');
+
+      /**
+       * Removes the banner immediately (without animation) and sets
+       * the `displayPostUpdateBanner` flag to false.
+       *
+       * @param {boolean} animateConfigNoticeCollpase
+       * Specifies whether the `configNoice` should animate collapse
+       * when empty.
+       */
+      const removeBanner = (animateConfigNoticeCollpase = true) => {
+        postUpdateBannerParent.remove();
+
+        // Set the `displayPostUpdateBanner` flag to false.
+        // This will mark the banner as read and won't
+        // display the banner until next update.
+        flags.displayPostUpdateBanner = false;
+        fs.writeFileSync(flagsFilePath, JSON.stringify(flags));
+
+        // Collapse and hide `configNotice` if empty
+        if (configNotice.childElementCount === 0) {
+          if (animateConfigNoticeCollpase) {
+            configNotice.style.paddingTop = 0;
+
+            setTimeout(() => {
+              configNotice.style.display = 'none';
+              configNotice.style.paddingTop = '30px';
+            }, 250);
+          }
+          else {
+            configNotice.style.display = 'none';
+          }
+        }
+      };
+
+      postUpdateBanner.onclick = () => {
+        const changelogAccordion = document.querySelector('#config-item__whats-new');
+        const changelogAccordionToggle = changelogAccordion.querySelector('#whats-new');
+
+        removeBanner(false);
+        changelogAccordionToggle.checked = true;
+        changelogAccordion.scrollIntoView({ behavior: 'smooth' });
+      };
+
+      postUpdateBannerDismissButton.onclick = (event) => {
+        event.stopPropagation();
+
+        postUpdateBanner.style.maxHeight = 0;
+        postUpdateBanner.style.paddingTop = 0;
+        postUpdateBanner.style.paddingBottom = 0;
+        postUpdateBanner.style.marginTop = 0;
+
+        setTimeout(() => removeBanner(), 250);
+      };
+    }
+
+    // Button for opening a new bug report
+    const bugReportButton = mainArea.querySelector('#bug-report-button');
+
+    bugReportButton.onclick = () => {
+      let additionalInfo = '';
+      const bugReportLink = `${repoUrl}/issues/new?assignees=Melvin-Abraham&labels=%F0%9F%90%9B+bug&template=bug_report.yml&title=%5B%F0%9F%90%9B+Bug%5D%3A+`;
+      const { commitHash, commitDate } = getCommitInfo();
+
+      additionalInfo += [
+        '### :information_source: Platform Info',
+        `Running on **${os.type} ${os.arch} ${os.release}**`,
+      ].join('\n');
+
+      if (process.platform === 'linux') {
+        // Distribution Type
+        const distributionType = process.env.DIST_TYPE;
+        additionalInfo += '\n**Distribution Type:** ';
+
+        switch (distributionType) {
+          case 'deb':
+            additionalInfo += 'Debian';
+            break;
+
+          case 'rpm':
+            additionalInfo += 'Red Hat';
+            break;
+
+          default:
+            additionalInfo += 'Unknown';
+            break;
+        }
+
+        // Windowing System
+        additionalInfo += `\n**Windowing System:** ${
+          isWaylandSession() ? 'Wayland' : 'X11'
+        }`;
+
+        // Package variant
+        if (isSnap()) {
+          additionalInfo += '\nRunning as **Snap** package';
+        }
+        else if (isAppImage()) {
+          additionalInfo += '\nRunning as **AppImage** package';
+        }
+      }
+
+      // Dev Mode related info
+      if (process.env.DEV_MODE === 'true') {
+        additionalInfo += [
+          '\n',
+          '### :hammer_and_wrench: Running in Dev Mode',
+          `**Commit Hash:** ${commitHash}`,
+          `**Commit Date:** ${commitDate}`,
+          `**Node.js Version:** ${process.versions.node}`,
+          `**Electron Version:** ${process.versions.electron}`,
+        ].join('\n');
+      }
+
+      additionalInfo = encodeURIComponent(additionalInfo);
+      openLink(`${bugReportLink}&relevant-assets=${additionalInfo}`);
+    };
+
+    if (isFallbackMode()) {
+      configNotice.style.display = 'block';
+      const fallbackModeAccordionParent = document.createElement('div');
+
+      fallbackModeAccordionParent.innerHTML += `
+        <div
+          class="setting-key accordion"
+          style="
+            margin-top: 10px;
+            margin-right: 30px;
+            background: #fbbc0530;
+            padding: 10px 30px 18px 30px;
+            border-radius: 10px;
+          "
+        >
+          <input type="checkbox" id="alert-accordion" />
+          <label for="alert-accordion" class="accordion-tile">
+            <div style="width: 100%; display: inline-block;">
+              <span>
+                <img src="../res/fallback.svg" style="
+                  height: 25px;
+                  width: 25px;
+                  vertical-align: sub;
+                  padding-right: 12px;
+                  ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+                >
+              </span>
+              <span style="width: 100%;">
+                Fallback mode is active
+              </span>
+              <span
+                class="accordion-chevron"
+                style="${getEffectiveTheme() === 'light' ? '' : 'filter: invert(1);'}"
+              >
+                <img src="../res/chevron_down.svg" />
+              </span>
+            </div>
+          </label>
+          <div class="accordion-content">
+            <div style="margin-top: 30px;">
+              <p>
+                The app settings (except a few) have been temporarily set to the defaults.
+                You can change any settings here that you think might be causing issues
+                and save them permanently.
+              </p>
+              <p>
+                Making changes to any settings while in fallback mode might not reflect
+                changes on subsequent relaunches until you revert back to normal mode.
+              </p>
+              <div style="padding-top: 15px; padding-bottom: 20px;">
+                <span style="padding-right: 5px; opacity: 0.5;">
+                  Done with the changes?
+                </span>
+
+                <div class="button" onclick="restartInNormalMode()">
+                  Revert back to normal mode
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      configNotice.appendChild(fallbackModeAccordionParent);
+    }
+
+    if (!canAccessMicrophone) {
+      configNotice.style.display = 'block';
+      const microphoneInaccessibleAccordionParent = document.createElement('div');
+
+      microphoneInaccessibleAccordionParent.innerHTML += `
+        <div
+          class="setting-key accordion"
+          style="
+            margin-top: 10px;
+            margin-right: 30px;
+            background: #ea433530;
+            padding: 10px 30px 18px 30px;
+            border-radius: 10px;
+          "
+        >
+          <input type="checkbox" id="alert-accordion" />
+          <label for="alert-accordion" class="accordion-tile">
+            <div style="width: 100%; display: inline-block;">
+              <span>
+                <img src="../res/mic_off.svg" style="
+                  height: 22px;
+                  width: 22px;
+                  vertical-align: sub;
+                  padding-right: 12px;
+                  ${getEffectiveTheme() === 'light' ? '' : 'filter: invert(1);'}"
+                >
+              </span>
+              <span style="width: 100%;">
+                Assistant cannot access microphone
+              </span>
+              <span
+                class="accordion-chevron"
+                style="${getEffectiveTheme() === 'light' ? '' : 'filter: invert(1);'}"
+              >
+                <img src="../res/chevron_down.svg" />
+              </span>
+            </div>
+          </label>
+          <div class="accordion-content">
+            <div style="margin-top: 30px;">
+              This could happen in the following cases:
+              <ul>
+                <li>When your device does not have a microphone</li>
+                <li>Permission to device's microphone is not granted</li>
+              </ul>
+              If you do have a working microphone in your device, you might need to
+              <strong>grant permission</strong> to the microphone.
+              ${getMicPermEnableHelp()}
+              <i style="display: block; margin-top: 30px;">
+                You must relaunch Google Assistant for the changes to take effect.
+              </i>
+            </div>
+          </div>
+        </div>
+      `;
+
+      configNotice.appendChild(microphoneInaccessibleAccordionParent);
+    }
+
     const keyFilePathInput = mainArea.querySelector('#key-file-path');
     const savedTokensPathInput = mainArea.querySelector('#saved-tokens-path');
-    // ... (resto de selectores existentes) ...
     const languageSelector = document.querySelector('#lang-selector');
     const respondToHotword = document.querySelector('#hotword');
     const forceNewConversationCheckbox = document.querySelector('#new-conversation');
@@ -2439,44 +2673,190 @@ async function openConfig(configItem = null) {
     const themeSelector = document.querySelector('#theme-selector');
     const hotkeyBehaviorSelector = document.querySelector('#hotkey-behavior-selector');
 
-
-    // --- Lógica de configuración (mayormente existente) ---
     keyFilePathInput.addEventListener(
       'focusout',
       () => validatePathInput(keyFilePathInput),
     );
 
-    // Assistant Hotkey (código existente)
+    // Assistant Hotkey
     const keybindingListener = new KeyBindingListener();
-    // ... (resto del código para hotkey) ...
+    let { assistantHotkey } = assistantConfig;
 
-
-    // Populate microphone and speaker source selectors (código existente)
-    const deviceList = await navigator.mediaDevices.enumerateDevices();
-    // ... (código para llenar selectores) ...
-
-
-    // Disable "Launch at system startup" (código existente)
-    if (process.env.DEV_MODE) {
-       // ... (código existente) ...
+    if (!assistantHotkey || !isValidAccelerator(assistantHotkey)) {
+      assistantHotkey = 'Super+Shift+A';
     }
 
-    // Disable "Enable Auto-Update" (código existente)
-    const doesUseGenericUpdater = ipcRenderer.sendSync('update:doesUseGenericUpdater');
-     if (doesUseGenericUpdater) {
-       // ... (código existente) ...
-     }
-
-    // Disable `enableAudioOutputForTypedQueries` (código existente)
-    enableAudioOutput.onchange = () => {
-       // ... (código existente) ...
+    // Mark input as valid/invalid based on hotkey
+    const validateAccelerator = () => {
+      if (isValidAccelerator(assistantHotkey)) {
+        markInputAsValid(assistantHotkeyBar);
+      }
+      else {
+        markInputAsInvalid(assistantHotkeyBar);
+      }
     };
 
+    const resetHotkey = () => {
+      // eslint-disable-next-line prefer-destructuring
+      assistantHotkey = assistantConfig['assistantHotkey'];
 
-    // --- Asignar valores de config a UI (código existente) ---
+      assistantHotkeyBar.innerText = assistantHotkey
+        .split('+')
+        .map((key) => getNativeKeyName(key))
+        .join(' + ');
+
+      mainArea.querySelector('#hotkey-reset-btn').classList.add('disabled');
+      mainArea.querySelector('#hotkey-reset-btn').onclick = null;
+      validateAccelerator();
+    };
+
+    /**
+     * Callback function to handle raw key combinations.
+     *
+     * @param {string[]} rawKeyCombinations
+     * Returns a list of keys pressed by the user.
+     * The keys returned are compliant with Electron and
+     * is cross-platform.
+     */
+    const keyCombinationCallback = (rawKeyCombinations) => {
+      assistantHotkey = rawKeyCombinations.join('+');
+      const keyCombinations = rawKeyCombinations.map((key) => getNativeKeyName(key));
+
+      assistantHotkeyBar.innerText = keyCombinations.join(' + ');
+      assistantHotkeyBar.classList.remove('input-active');
+
+      assistantHotkeyBar.removeEventListener(
+        'key-combination',
+        keyCombinationCallback,
+      );
+
+      // Mark input as valid/invalid based on hotkey
+      validateAccelerator();
+
+      // Enable or disable reset button
+      if (assistantHotkey !== assistantConfig['assistantHotkey']) {
+        mainArea
+          .querySelector('#hotkey-reset-btn')
+          .classList.remove('disabled');
+
+        mainArea.querySelector('#hotkey-reset-btn').onclick = resetHotkey;
+      }
+      else {
+        mainArea.querySelector('#hotkey-reset-btn').classList.add('disabled');
+        mainArea.querySelector('#hotkey-reset-btn').onclick = null;
+      }
+    };
+
+    assistantHotkeyBar.onclick = () => {
+      if (assistantHotkeyBar.classList.contains('input-active')) {
+        return;
+      }
+
+      keybindingListener.startListening(true);
+
+      assistantHotkeyBar.innerText = 'Listening for key combinations... ESC to cancel';
+      assistantHotkeyBar.classList.add('input-active');
+
+      keybindingListener.on('key-combination', keyCombinationCallback);
+
+      keybindingListener.on('cancel', () => {
+        assistantHotkeyBar.innerText = assistantHotkey
+          .split('+')
+          .map((key) => getNativeKeyName(key))
+          .join(' + ');
+
+        assistantHotkeyBar.classList.remove('input-active');
+        assistantHotkeyBar.removeEventListener(
+          'key-combination',
+          keyCombinationCallback,
+        );
+      });
+    };
+
+    // Populate microphone and speaker source selectors
+    const deviceList = await navigator.mediaDevices.enumerateDevices();
+
+    deviceList.forEach((device) => {
+      const selectItem = document.createElement('option');
+      selectItem.value = device.deviceId;
+      selectItem.text = device.label;
+
+      if (device.kind === 'audioinput') {
+        microphoneSourceSelector.appendChild(selectItem);
+      }
+      else if (device.kind === 'audiooutput') {
+        speakerSourceSelector.appendChild(selectItem);
+      }
+    });
+
+    // Disable "Launch at system startup" option
+    // when running in development mode
+
+    if (process.env.DEV_MODE) {
+      const launchAtStartupConfigItem = document.querySelector(
+        '#config-item__launch-at-startup',
+      );
+      const launchAtStartupHelpElement = launchAtStartupConfigItem.querySelector(
+        '.setting-key img',
+      );
+      const launchAtStartupSwitchElement = launchAtStartupConfigItem.querySelector(
+        '.setting-value .switch',
+      );
+
+      launchAtStartUp.disabled = true;
+
+      launchAtStartupSwitchElement.setAttribute(
+        'title',
+        'Disabled in development mode',
+      );
+
+      launchAtStartupSwitchElement
+        .querySelector('.slider')
+        .classList.add('disabled');
+
+      launchAtStartupHelpElement.setAttribute('title', [
+        launchAtStartupHelpElement.getAttribute('title'),
+        '(This option is currently disabled due to development mode)',
+      ].join('\n'));
+    }
+
+    // Disable "Enable Auto-Update" toggle, if the platform or
+    // package format uses generic updater instad of electron updater
+    const doesUseGenericUpdater = ipcRenderer.sendSync('update:doesUseGenericUpdater');
+
+    if (doesUseGenericUpdater) {
+      autoDownloadUpdates.disabled = true;
+
+      const autoDownloadUpdatesParent = autoDownloadUpdates.parentElement;
+      autoDownloadUpdatesParent.querySelector('.slider').classList.add('disabled');
+
+      if (process.env.DEV_MODE) {
+        autoDownloadUpdatesParent.title = 'Auto-downloading updates is not supported when in development mode';
+      }
+      else {
+        autoDownloadUpdatesParent.title = 'Auto-downloading updates is not supported for this platform or package format';
+      }
+    }
+
+    // Disable `enableAudioOutputForTypedQueries` option
+    // whenever "Audio Output" is disabled.
+    enableAudioOutput.onchange = () => {
+      const enableAudioOutputForTypedQueriesParent = enableAudioOutputForTypedQueries.parentElement;
+
+      if (enableAudioOutput.checked) {
+        enableAudioOutputForTypedQueries.disabled = false;
+        enableAudioOutputForTypedQueriesParent.querySelector('.slider').classList.remove('disabled');
+        enableAudioOutputForTypedQueriesParent.title = '';
+      }
+      else {
+        enableAudioOutputForTypedQueries.disabled = true;
+        enableAudioOutputForTypedQueriesParent.querySelector('.slider').classList.add('disabled');
+        enableAudioOutputForTypedQueriesParent.title = 'Option is diabled since Audio Output is off';
+      }
+    };
+
     keyFilePathInput.value = assistantConfig['keyFilePath'];
     savedTokensPathInput.value = assistantConfig['savedTokensPath'];
-    // ... (resto de asignaciones existentes) ...
     languageSelector.value = assistantConfig['language'];
     respondToHotword.checked = assistantConfig['respondToHotword'];
     forceNewConversationCheckbox.checked = assistantConfig['forceNewConversation'];
@@ -2500,118 +2880,510 @@ async function openConfig(configItem = null) {
     enableAutoScaling.checked = assistantConfig['enableAutoScaling'];
     themeSelector.value = assistantConfig['theme'];
     hotkeyBehaviorSelector.value = assistantConfig['hotkeyBehavior'];
-    // ... (código para hotkey bar text) ...
+    assistantHotkeyBar.innerText = assistantHotkey
+      .split('+')
+      .map((key) => getNativeKeyName(key))
+      .join(' + ');
 
-    // --- Asignar listeners a botones (código existente) ---
     mainArea.querySelector('#key-file-path-browse-btn').onclick = () => {
-      // ... (código existente) ...
+      openFileDialog((result) => {
+        if (!result.canceled) keyFilePathInput.value = result.filePaths[0];
+      }, 'Select Key File');
     };
+
     mainArea.querySelector('#saved-tokens-path-browse-btn').onclick = () => {
-      // ... (código existente) ...
+      openFileDialog((result) => {
+        if (!result.canceled) savedTokensPathInput.value = result.filePaths[0];
+      }, 'Select Saved Token File');
     };
+
     mainArea.querySelector('#detect-lang-btn').onclick = () => {
-      // ... (código existente) ...
+      const languageNames = new Intl.DisplayNames(['en'], {
+        type: 'language',
+      });
+      const systemLocale = navigator.language;
+      const systemLanguage = languageNames.of(systemLocale);
+
+      if (Object.keys(supportedLanguages).includes(systemLocale)) {
+        languageSelector.value = systemLocale;
+
+        languageSelector.classList.add('selector-active');
+        setTimeout(
+          () => languageSelector.classList.remove('selector-active'),
+          200,
+        );
+      }
+      else {
+        console.warn(
+          ...consoleMessage(
+            `Locale ${systemLocale} is not supported by API`,
+            'warn',
+          ),
+        );
+
+        const buttonId = displayDialog({
+          type: 'error',
+          title: 'Language unsupported',
+          message: 'Language unsupported',
+          detail: [
+            `Your system seems to use "${systemLanguage}" [Locale: "${systemLocale}"].`,
+            'This language is not supported by Google Assistant SDK at the moment.',
+            '',
+            'If you happen to find this language in the Google Assistant SDK\'s "Language Support" page, please do open an issue regarding the same.',
+          ].join('\n'),
+          buttons: ['Track supported languages', 'OK'],
+          cancelId: 1,
+        });
+
+        if (buttonId === 0) {
+          openLink('https://developers.google.com/assistant/sdk/reference/rpc/languages');
+        }
+      }
     };
 
+    validatePathInput(keyFilePathInput);
 
-    validatePathInput(keyFilePathInput); // Validar ruta al cargar
+    const setCurrentThemeIcon = () => {
+      document.querySelector('#curr-theme-icon').innerHTML = `
+        <span>
+          <img
+            src="../res/${
+              getEffectiveTheme(themeSelector.value) === 'light'
+                ? 'light_mode.svg'
+                : 'dark_mode.svg'
+            }"
+            style="height: 35px; width: 38px; vertical-align: bottom;"
+          >
+        </span>
+      `;
+    };
 
-    // --- Lógica de icono de tema (código existente) ---
-    const setCurrentThemeIcon = () => { /* ... código existente ... */ };
     setCurrentThemeIcon();
-    document.querySelector('#theme-selector').onchange = () => { setCurrentThemeIcon(); };
 
+    document.querySelector('#theme-selector').onchange = () => {
+      setCurrentThemeIcon();
+    };
 
-    // --- Botones de Guardar/Cancelar (código existente) ---
     suggestionArea.innerHTML = '<div class="suggestion-parent"></div>';
     const suggestionParent = document.querySelector('.suggestion-parent');
+
     suggestionParent.innerHTML = `
-      <div id="save-config" class="suggestion"> Save </div>
-      <div id="cancel-config-changes" class="suggestion"> Cancel </div>
+      <div id="save-config" class="suggestion">
+        <span>
+          <img src="../res/done.svg" style="
+            height: 20px;
+            width: 20px;
+            vertical-align: top;
+            padding-right: 5px;"
+          >
+        </span>
+        Save
+      </div>
+
+      <div id="cancel-config-changes" class="suggestion">
+        Cancel
+      </div>
     `;
 
-    historyHead++; // Incrementar aquí como antes
+    historyHead++;
 
-    const closeCurrentScreen = () => { /* ... código existente para cerrar config ... */ };
+    const closeCurrentScreen = () => {
+      const currentDOM = parser.parseFromString(currentHTML, 'text/html');
 
-    // --- Lógica de sección de actualización (código existente) ---
+      if (currentDOM.querySelector('.assistant-markup-response')) {
+        displayScreenData(history[historyHead - 1]['screen-data']);
+      }
+      else {
+        mainArea.innerHTML = currentDOM.querySelector('#main-area').innerHTML;
+      }
+
+      suggestionArea.innerHTML = currentDOM.querySelector('#suggestion-area').innerHTML;
+
+      const suggestions = [
+        ...document.querySelectorAll('.suggestion-parent > .suggestion'),
+      ];
+
+      suggestionOnClickListeners.forEach((listener, suggestionIndex) => {
+        suggestions[suggestionIndex].onclick = listener;
+      });
+
+      historyHead--;
+
+      if (historyHead === -1) {
+        document.querySelector('.app-title').innerText = '';
+      }
+
+      // If the user is in welcome screen, show updated welcome message
+      initHeadline = document.querySelector('#init-headline');
+
+      if (initHeadline) {
+        const {
+          welcomeMessage,
+          initSuggestions,
+        } = supportedLanguages[assistantConfig['language']];
+
+        initHeadline.innerText = welcomeMessage;
+
+        suggestionArea.innerHTML = `
+          <div class="suggestion-parent">
+            ${initSuggestions.map((suggestionObj) => `
+              <div
+                class="suggestion"
+                onclick="assistantTextQuery('${suggestionObj.query}')"
+              >
+                  ${suggestionObj.label}
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+    };
+
+    /** @type {HTMLElement} */
     const downloadExternallyButton = document.querySelector('#download-external-btn');
-    // ... (código existente para updater status y changelog) ...
 
+    downloadExternallyButton.onclick = () => {
+      const updateVersion = sessionStorage.getItem('updateVersion');
+
+      if (updateVersion) {
+        const latestReleaseUrl = getTagReleaseLink(`v${updateVersion}`);
+        electronShell.openExternal(latestReleaseUrl);
+      }
+      else {
+        const res = displayDialog({
+          type: 'info',
+          message: 'No new updates available',
+          detail: 'There are no new updates to download at the moment',
+          buttons: [
+            'Show all releases',
+            'OK',
+          ],
+          cancelId: 1,
+        });
+
+        console.log(ipcRenderer.sendSync('get-allow-close-on-blur'));
+
+        if (res === 0) {
+          console.log(ipcRenderer.sendSync('get-allow-close-on-blur'));
+          openLink(releasesUrl);
+        }
+      }
+    };
+
+    // Set Updater Status
+
+    document.querySelector('#check-for-update-btn').onclick = () => UpdaterRenderer.requestCheckForUpdates();
+
+    if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateDownloaded) {
+      updaterRenderer.setUpdateAndRestartSection();
+    }
+    else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateAvailable) {
+      const updaterCurrentInfo = JSON.parse(sessionStorage.getItem('updaterCurrentInfo'));
+      updaterRenderer.setDownloadUpdateSection(updaterCurrentInfo);
+    }
+    else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateNotAvailable) {
+      updaterRenderer.setNoUpdatesAvailableSection();
+    }
+    else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.Error) {
+      updaterRenderer.setUpdaterErrorSection();
+    }
+    else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.InstallingUpdate) {
+      updaterRenderer.setInstallingUpdatesSection();
+    }
+
+    // Set Changelog ("What's new" section)
+
+    const changelogContentOuterContainer = document.querySelector('#changelog-accordion-content');
+    const changelogContentInnerContainer = changelogContentOuterContainer.querySelector('div');
+    const changelogContent = ipcRenderer.sendSync('update:getChangelog');
+    const changelogVersion = getVersion(JSON.parse(sessionStorage.getItem('updaterCurrentInfo'))?.version);
+
+    if (changelogContent && !changelogVersion.endsWith('undefined')) {
+      // If a changelog is returned successfully, display
+      // the changelog along with the GitHub release link
+
+      const releaseLink = getTagReleaseLink(changelogVersion);
+
+      changelogContentInnerContainer.innerHTML = `
+        ${changelogContent}
+
+        <div style="padding-top: 25px; padding-bottom: 10px;">
+          <div class="button setting-item-button" onclick="openLink('${releaseLink}')">
+            <span>
+              <img src="../res/proceed.svg" style="
+                height: 19px;
+                width: 16px;
+                vertical-align: sub;
+                padding-right: 10px;
+                ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+              >
+            </span>
+            Show in GitHub
+          </div>
+        </div>
+      `;
+
+      // If the changelog version corresponds to available update,
+      // modify the changelog accordion title text to reflect the same
+
+      if (changelogVersion !== getVersion()) {
+        const changelogAccordionTitleText = document.querySelector('#changelog-accordion-title-text');
+
+        changelogAccordionTitleText.innerHTML = `
+          What's new in the upcoming version — <strong>${changelogVersion}</strong>
+        `;
+      }
+
+      // Set changelog accordion max-height based on the content. It ensures
+      // that the accordion will maintain a proper height when expanded without
+      // trimming the content inside
+
+      const changelogAccordion = document.querySelector('#config-item__whats-new');
+
+      changelogAccordion.style.setProperty(
+        '--changelog-accordion-content-height',
+        `${changelogContentOuterContainer.scrollHeight}px`,
+      );
+    }
+    else {
+      // If the changelog cannot be fetched (probably due to network issues),
+      // show an error in the accordion content
+
+      changelogContentInnerContainer.innerHTML = `
+        <span>
+          <img src="../res/error.svg" style="
+            height: 20px;
+            width: 20px;
+            vertical-align: sub;
+            padding-right: 5px;"
+          >
+        </span>
+        <span style="color: var(--color-red);">
+          An error occurred while fetching releases
+        </span>
+        <div style="opacity: 0.5; margin-left: 28px; margin-top: 5px;">
+          <i>
+            Please check your internet
+          </i>
+        </div>
+      `;
+    }
 
     document.querySelector('#cancel-config-changes').onclick = () => {
       closeCurrentScreen();
-      keybindingListener.stopListening(); // Detener listener si se cancela
+      keybindingListener.stopListening();
     };
 
-    // --- Lógica de guardar configuración ---
     document.querySelector('#save-config').onclick = () => {
-      // --- MODIFICACIÓN: Quitar validaciones estrictas de savedTokensPath si ya no es obligatorio ---
-      // La lógica original asumía que savedTokensPath era necesario si keyFilePath existía.
-      // Comentar o eliminar estas validaciones si ya no aplican al flujo de servidor.
-      /*
       if (
         keyFilePathInput.value.trim() !== ''
         && savedTokensPathInput.value.trim() === ''
       ) {
-        // ... diálogo original ...
-      } else if (
+        // If `savedTokensPath` is empty
+
+        const result = displayDialog({
+          type: 'question',
+          title: 'Saved Tokens Path is empty',
+          message: [
+            'You have not specified any location for "Saved Tokens Path".',
+            'Assistant can set a path automatically according to "Key File Path" and save them.',
+          ].join('\n'),
+          buttons: ['Automatically set a path', 'Cancel'],
+          defaultId: 0,
+          cancelId: 1,
+        });
+
+        if (result === 1) return;
+
+        savedTokensPathInput.value = path.join(
+          path.dirname(keyFilePathInput.value),
+          'tokens.json',
+        );
+      }
+
+      else if (
         fs.existsSync(savedTokensPathInput.value)
         && fs.statSync(savedTokensPathInput.value).isDirectory()
       ) {
-        // ... diálogo original ...
-      } else if (
+        // if `savedTokensPath` is a directory
+
+        const result = displayDialog({
+          type: 'question',
+          title: 'Saved Tokens Path is missing a filename',
+          message: [
+            '"Saved Tokens Path" is a directory and does not point to a file.',
+            'Assistant can create a token file for you and save them.',
+          ].join('\n'),
+          buttons: ['Create a file "tokens.json"', 'Cancel'],
+          defaultId: 0,
+          cancelId: 1,
+        });
+
+        if (result === 1) return;
+
+        savedTokensPathInput.value = path.join(
+          savedTokensPathInput.value,
+          'tokens.json',
+        );
+      }
+
+      else if (
         keyFilePathInput.value.trim() !== ''
         && !fs.existsSync(path.dirname(savedTokensPathInput.value))
       ) {
-       // ... diálogo original ...
+        // `savedTokensPath` is not a existing path
+
+        const result = displayDialog({
+          type: 'info',
+          title: 'Saved Tokens Path does not exist',
+          message: [
+            '"Saved Tokens Path" is a non-existent path.',
+            'Assistant can recursively create directories for you.',
+          ].join('\n'),
+          buttons: ['Recursively create directory', 'Cancel'],
+          defaultId: 0,
+          cancelId: 1,
+        });
+
+        if (result === 1) return;
+
+        const savedTokensPathVal = savedTokensPathInput.value;
+
+        try {
+          fs.mkdirSync(path.dirname(savedTokensPathVal), {
+            recursive: true,
+          });
+        }
+        catch (error) {
+          console.group(...consoleMessage(
+            `${error.code} Exception: mkdir failed`,
+            'error',
+          ));
+          console.error(error);
+          console.groupEnd();
+
+          const errMsgContent = [
+            'Assistant failed to create the following path:',
+            `"${savedTokensPathVal}"`,
+            '',
+            'Either the path is invalid or Assistant does not have enough permissions to create one.',
+          ].join('\n');
+
+          displayDialog({
+            type: 'error',
+            title: 'Path Creation Failure',
+            message: 'Path Creation Failure',
+            detail: errMsgContent,
+            buttons: ['OK'],
+            cancelId: 0,
+          });
+
+          return;
+        }
       }
-      // ... (validación de creación de archivo de token) ...
+
+      // Check if it's possible to create a token file
+
       try {
         if (!fs.existsSync(savedTokensPathInput.value) && keyFilePathInput.value !== '') {
           fs.writeFileSync(savedTokensPathInput.value, '');
         }
-      } catch (err) {
-        // ... manejo de error original ...
       }
-      */
-      // --- FIN MODIFICACIÓN ---
+      catch (err) {
+        console.group(...consoleMessage('Error while creating tokens file'));
+        console.error(err);
+        console.groupEnd();
 
-      // Validar keyFilePath si todavía se usa (opcional)
+        let detail = 'Unexpected error occurred while creating tokens file.';
+
+        if (err.code === 'EPERM' || err.code === 'EACCES') {
+          detail = [
+            'Assistant failed to create the token file due to Permission Error.',
+            '',
+            `Try setting the "Saved Tokens Path" to a different location as the current location requires ${
+              (process.platform === 'win32') ? 'admin' : 'superuser'
+            } privileges to save the tokens.`,
+          ].join('\n');
+        }
+        else {
+          detail = [
+            'Something went wrong while creating tokens file.',
+            'Try setting the "Saved Tokens Path" to a different location.',
+            '',
+            err,
+          ].join('\n');
+        }
+
+        displayDialog({
+          type: 'error',
+          message: 'Failed to create Token File',
+          detail,
+          buttons: ['OK'],
+          cancelId: 0,
+        });
+
+        return;
+      }
+
       if (validatePathInput(keyFilePathInput, true)) {
-        // Warn users if saving settings in fallback mode (código existente)
-        if (isFallbackMode()) { /* ... código existente ... */ }
+        // Warn users if saving settings in fallback mode
 
-        // Determine if relaunch is required (podría cambiar)
+        if (isFallbackMode()) {
+          const result = displayDialog({
+            message: 'Confirm settings overwrite',
+            detail: [
+              'Saving the settings in Fallback mode will overwrite any existing settings you have in normal mode. ',
+              'Are you sure to continue?',
+              '\n',
+              '\nNote: Making changes to any settings while in fallback mode might not reflect changes ',
+              'on subsequent relaunches until you revert back to normal mode.',
+            ].join(''),
+            type: 'question',
+            buttons: [
+              'Overwrite existing settings',
+              'Cancel',
+            ],
+            cancelId: 1,
+          });
+
+          if (result === 1) return;
+        }
+
+        // Determine if relaunch is required
+
         let relaunchRequired = false;
-        // --- MODIFICACIÓN: Relaunch podría ser necesario solo si cambian archivos locales aún usados ---
+
         if (
           keyFilePathInput.value !== assistantConfig['keyFilePath']
           || savedTokensPathInput.value !== assistantConfig['savedTokensPath']
         ) {
-           // Si cambian los archivos locales (y aún los usas para algo), quizá sí se necesite relanzar
-           // Si ya no se usan, esta condición es irrelevante para el login.
-          // relaunchRequired = true;
-          console.warn("Key file or saved tokens path changed. Relaunch might be needed if these files are still actively used by the library.");
+          relaunchRequired = true;
         }
-        // --- FIN MODIFICACIÓN ---
 
+        // Set display preference update flag before saving config
 
-        // Set display preference update flag (código existente)
         let shouldUpdateDisplayPref = true;
-        // ... (código existente) ...
 
-
-        // Actualizar hotkey (código existente)
-        if (assistantConfig['assistantHotkey'] !== assistantHotkey) {
-           // ... (código existente) ...
+        if (
+          assistantConfig['displayPreference'] === displayPreferenceSelector.value
+        ) {
+          shouldUpdateDisplayPref = false;
         }
 
+        if (assistantConfig['assistantHotkey'] !== assistantHotkey) {
+          if (isValidAccelerator(assistantHotkey)) {
+            ipcRenderer.send('update-hotkey', assistantHotkey);
+          }
+          else {
+            const assistantHotkeyDiv = document.querySelector('#hotkey-div');
+            markInputAsInvalid(assistantHotkeyDiv, true);
+          }
+        }
 
-        // --- Asignar valores de UI a assistantConfig (código existente) ---
-        assistantConfig['keyFilePath'] = keyFilePathInput.value; // Guardar aunque sea opcional
-        assistantConfig['savedTokensPath'] = savedTokensPathInput.value; // Guardar aunque sea opcional
-        // ... (resto de asignaciones existentes) ...
+        // Set the `assistantConfig` as per the settings
+
+        assistantConfig['keyFilePath'] = keyFilePathInput.value;
+        assistantConfig['savedTokensPath'] = savedTokensPathInput.value;
         assistantConfig['language'] = languageSelector.value;
         assistantConfig['respondToHotword'] = respondToHotword.checked;
         assistantConfig['forceNewConversation'] = forceNewConversationCheckbox.checked;
@@ -2637,35 +3409,129 @@ async function openConfig(configItem = null) {
         assistantConfig['hotkeyBehavior'] = hotkeyBehaviorSelector.value;
         assistantConfig['assistantHotkey'] = assistantHotkey;
 
+        // Apply settings for appropriate options
 
-        // --- Aplicar configuraciones (código existente) ---
         config.conversation.isNew = assistantConfig['forceNewConversation'];
         config.conversation.lang = assistantConfig['language'];
-        // ... (resto de aplicaciones: login item, always on top, border, updater, audio devices, hotword) ...
-        keybindingListener.stopListening(); // Detener listener al guardar
+        assistantInput.placeholder = supportedLanguages[assistantConfig['language']].inputPlaceholder;
+        keybindingListener.stopListening();
 
+        app.setLoginItemSettings({
+          openAtLogin: !process.env.DEV_MODE
+            ? assistantConfig['launchAtStartup']
+            : false,
+          args: ['--sys-startup'],
+        });
 
-        // Notify about config changes to main process (código existente)
+        if (assistantConfig['windowFloatBehavior'] !== 'close-on-blur') {
+          if (assistantConfig['windowFloatBehavior'] === 'always-on-top') {
+            assistantWindow.setAlwaysOnTop(true, 'floating');
+          }
+          else {
+            assistantWindow.setAlwaysOnTop(false, 'normal');
+          }
+
+          window.onblur = null;
+        }
+        else {
+          window.onblur = closeOnBlurCallback;
+        }
+
+        setAssistantWindowBorder();
+        updaterRenderer.autoDownloadUpdates = assistantConfig.autoDownloadUpdates;
+
+        mic.setDeviceId(assistantConfig['microphoneSource']);
+        hotwordDetector.setMicrophone(assistantConfig['microphoneSource']);
+
+        p5jsMic.getSources((sources) => {
+          p5jsMic.setSource(
+            sources
+              .filter((source) => source.kind === 'audioinput')
+              .map((source) => source.deviceId)
+              .indexOf(assistantConfig['microphoneSource']),
+          );
+        });
+
+        audPlayer.setDeviceId(assistantConfig['speakerSource']);
+
+        if (assistantConfig['respondToHotword']) {
+          hotwordDetector.start();
+        }
+        else {
+          hotwordDetector.stop();
+        }
+
+        // Notify about config changes to main process
         ipcRenderer.send('update-config', assistantConfig);
 
-        // Save and exit screen (código existente)
+        // Save and exit screen
+
         saveConfig();
         closeCurrentScreen();
         setTheme();
 
-        // Reposition window (código existente)
-        if (shouldUpdateDisplayPref) { /* ... código existente ... */ }
+        // Collapses and properly positions the window (if the display preferences change)
 
-        // Request user to relaunch assistant if necessary (código existente, pero 'relaunchRequired' puede haber cambiado)
-        if (relaunchRequired) { /* ... código existente para mostrar pantalla de relanzar ... */ }
+        if (shouldUpdateDisplayPref) {
+          console.log(...consoleMessage(
+            `Switching to "Display ${assistantConfig['displayPreference']}"`,
+          ));
+          toggleExpandWindow(false);
+        }
+
+        // Request user to relaunch assistant if necessary
+
+        if (relaunchRequired) {
+          displayErrorScreen({
+            icon: {
+              path: '../res/refresh.svg',
+              style: `
+                height: 100px;
+                animation: rotate_anim 600ms cubic-bezier(0.48, -0.4, 0.26, 1.3);
+                ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}
+              `,
+            },
+            title: 'Relaunch Required',
+            details: 'A relaunch is required for changes to take place',
+            subdetails: 'Info: Settings changed',
+          });
+
+          // eslint-disable-next-line no-shadow
+          const suggestionParent = document.querySelector('.suggestion-parent');
+
+          suggestionParent.innerHTML = `
+            <div class="suggestion" onclick="relaunchAssistant()">
+              <span>
+                <img src="../res/refresh.svg" style="
+                  height: 20px;
+                  width: 20px;
+                  vertical-align: top;
+                  padding-right: 5px;
+                  ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+                >
+              </span>
+              Relaunch Assistant
+            </div>
+          `;
+        }
       }
     };
   }
 
-  // Scroll to requested config item (código existente)
-  if (configItem) { /* ... código existente ... */ }
-}
+  // Scroll to requested config item
 
+  if (configItem) {
+    const configItemId = `#config-item__${configItem}`;
+    const configItemElement = document.querySelector(configItemId);
+
+    configItemElement.classList.add('config-item-highlight');
+
+    setTimeout(
+      () => configItemElement.scrollIntoView({ behavior: 'smooth' }),
+      150,
+    );
+  }
+}
 
 /**
  * Updates the Navigation: 'Next' and 'Previous' buttons
@@ -2717,19 +3583,12 @@ function assistantTextQuery(query) {
     audPlayer.stop();
 
     config.conversation['textQuery'] = query;
-    // --- MODIFICACIÓN: Asegurarse que el asistente está listo antes de empezar ---
-    if (isAssistantReady && assistant) {
-        assistant.start(config.conversation);
-        setQueryTitle(query);
-        assistantInput.value = '';
-        currentTypedQuery = '';
-        stopMic(); // Detener micro si estaba activo
-    } else {
-        console.error("Assistant not ready or not initialized. Cannot send text query.");
-        displayQuickMessage("Assistant is not ready yet.");
-        // Podría intentar relanzar o mostrar error
-    }
-    // --- FIN MODIFICACIÓN ---
+    assistant.start(config.conversation);
+    setQueryTitle(query);
+    assistantInput.value = '';
+    currentTypedQuery = '';
+
+    stopMic();
   }
 }
 
@@ -2760,11 +3619,8 @@ function setQueryTitle(query) {
  * @returns {string} Title
  */
 function getCurrentQuery() {
-  // Fix: Ensure .app-title exists before accessing innerText
-  const titleElement = document.querySelector('.app-title');
-  return titleElement ? titleElement.innerText : '';
+  return document.querySelector('.app-title').innerText;
 }
-
 
 /**
  * Retry/Refresh result for the query displayed in the titlebar
@@ -2774,10 +3630,9 @@ function getCurrentQuery() {
  * _(Defaults to `true`)_
  */
 function retryRecent(popHistory = true) {
-  if (popHistory && history.length > 0) history.pop(); // Check history length
+  if (popHistory) history.pop();
   assistantTextQuery(getCurrentQuery());
 }
-
 
 /**
  * Display a preloader near the titlebar to notify
@@ -2785,9 +3640,8 @@ function retryRecent(popHistory = true) {
  */
 function activateLoader() {
   const loaderArea = document.querySelector('#loader-area');
-   if (loaderArea) loaderArea.classList.value = 'loader'; // Check existence
+  loaderArea.classList.value = 'loader';
 }
-
 
 /**
  * Make the preloader near the titlebar disappear
@@ -2795,9 +3649,8 @@ function activateLoader() {
  */
 function deactivateLoader() {
   const loaderArea = document.querySelector('#loader-area');
-   if (loaderArea) loaderArea.classList.value = ''; // Check existence
+  loaderArea.classList.value = '';
 }
-
 
 /**
  * Displays Error Screen.
@@ -2849,16 +3702,8 @@ function displayErrorScreen(opts = {}) {
     style: '',
   };
 
-   // Use provided icon path if available
-  if (opts.icon?.path) {
-      iconObj.path = opts.icon.path;
-  }
-  // Use provided icon style if available
-  if (opts.icon?.style) {
-      iconObj.style = opts.icon.style;
-  }
+  Object.assign(iconObj, opts.icon);
   options.icon = iconObj;
-
 
   mainArea.innerHTML = `
     <div id="${options.errContainerId}" class="error-area fade-in-from-bottom" style="${options.customStyle}">
@@ -2894,8 +3739,7 @@ function displayErrorScreen(opts = {}) {
  * Leave this parameter to infer from `assistantConfig.theme`
  */
 async function displayScreenData(screen, pushToHistory = false, theme = null) {
-    // ... (código existente de displayScreenData sin cambios relevantes a la autenticación) ...
-     deactivateLoader();
+  deactivateLoader();
 
   const htmlString = screen.data.toString();
   const htmlDocument = parser.parseFromString(htmlString, 'text/html');
@@ -2907,32 +3751,23 @@ async function displayScreenData(screen, pushToHistory = false, theme = null) {
 
   const mainContentDOM = htmlDocument.querySelector('#assistant-card-content');
 
-   // Check if mainContentDOM exists before accessing innerHTML
-  if (!mainContentDOM) {
-      console.error("Could not find #assistant-card-content in screen data.");
-      displayErrorScreen({ title: "Screen Data Error", details: "Could not process the response content." });
-      return; // Exit if content is missing
-  }
-
-
   mainArea.innerHTML = `
     <div class="assistant-markup-response fade-in-from-bottom">
       ${mainContentDOM.innerHTML}
     </div>`;
 
-    // ... (resto del código de displayScreenData: theming, scaling, links, suggestions, history) ...
-      if (theme === 'light' || getEffectiveTheme() === 'light') {
+  if (theme === 'light' || getEffectiveTheme() === 'light') {
     const emojiRegex = /(?:[\u2700-\u27bf]|(?:\ud83c[\udde6-\uddff]){2}|[\ud800-\udbff][\udc00-\udfff]|[\u0023-\u0039]\ufe0f?\u20e3|\u3299|\u3297|\u303d|\u3030|\u24c2|\ud83c[\udd70-\udd71]|\ud83c[\udd7e-\udd7f]|\ud83c\udd8e|\ud83c[\udd91-\udd9a]|\ud83c[\udde6-\uddff]|[\ud83c[\ude01-\ude02]|\ud83c\ude1a|\ud83c\ude2f|[\ud83c[\ude32-\ude3a]|[\ud83c[\ude50-\ude51]|\u203c|\u2049|[\u25aa-\u25ab]|\u25b6|\u25c0|[\u25fb-\u25fe]|\u00a9|\u00ae|\u2122|\u2139|\ud83c\udc04|[\u2600-\u26FF]|\u2b05|\u2b06|\u2b07|\u2b1b|\u2b1c|\u2b50|\u2b55|\u231a|\u231b|\u2328|\u23cf|[\u23e9-\u23f3]|[\u23f8-\u23fa]|\ud83c\udccf|\u2934|\u2935|[\u2190-\u21ff])*/g;
     const assistantMarkupResponse = mainArea.querySelector(
       '.assistant-markup-response',
     );
     const emojis = assistantMarkupResponse.innerHTML
       .match(emojiRegex)
-      ?.filter((x) => x); // Add optional chaining and check
+      .filter((x) => x);
 
     console.log('Emojis:', emojis);
 
-    emojis?.forEach((emoji) => { // Add optional chaining
+    emojis.forEach((emoji) => {
       assistantMarkupResponse.innerHTML = assistantMarkupResponse.innerHTML.replace(
         emoji,
         `<span style="filter: invert(1);">${emoji}</span>`,
@@ -2946,36 +3781,25 @@ async function displayScreenData(screen, pushToHistory = false, theme = null) {
   }
 
   let element = mainArea.querySelector('.assistant-markup-response')
-    ?.lastElementChild; // Add optional chaining
-
-    // Check if element exists before proceeding
-   if (!element) {
-       console.warn("Could not find last element child in assistant markup response.");
-       // Decide if you want to exit or continue gracefully
-       // return;
-   }
-
+    .lastElementChild;
 
   const hasWebAnswer = mainArea.querySelector('#tv_web_answer_root');
   const hasKnowledgePanel = mainArea.querySelector('#tv_knowledge_panel_source');
   const hasCarousel = mainArea.querySelector('#selection-carousel-tv');
   const hasPhotoCarousel = mainArea.querySelector('#photo-carousel-tv');
-  const hasTextContainer = element?.classList.contains('show_text_container'); // Optional chaining
-  const hasPlainText = hasTextContainer && element?.querySelector('.show_text_content'); // Optional chaining
+  const hasTextContainer = element.classList.contains('show_text_container');
+  const hasPlainText = hasTextContainer && element.querySelector('.show_text_content');
   const hasDefinition = mainArea.querySelector('#flex_text_audio_icon_chunk');
-  const elementFlag = element?.getAttribute('data-flag'); // Optional chaining
+  const elementFlag = element.getAttribute('data-flag');
   let isGoogleImagesContent;
 
   if (hasCarousel && !hasPhotoCarousel) {
     // Only when there is carousel other than "Photo Carousel"
-    // Ensure lastElementChild exists before modifying
-    const markupResponse = document.querySelector('.assistant-markup-response');
-    if (markupResponse?.lastElementChild) {
-       markupResponse.lastElementChild.innerHTML = hasCarousel.outerHTML;
-    }
+    document.querySelector('.assistant-markup-response')
+      .lastElementChild.innerHTML = hasCarousel.outerHTML;
   }
 
-  if (element && (elementFlag == null || elementFlag !== 'prevent-auto-scale')) { // Check element exists
+  if (elementFlag == null || elementFlag !== 'prevent-auto-scale') {
     if (!hasPlainText) {
       if (assistantConfig['enableAutoScaling']) {
         element.setAttribute(
@@ -3037,17 +3861,16 @@ async function displayScreenData(screen, pushToHistory = false, theme = null) {
     }
   }
 
-  // Ensure assistant-markup-response exists before adding class
-  const markupResponseElement = mainArea.querySelector('.assistant-markup-response');
-  if (markupResponseElement && (assistantConfig['enableAutoScaling'] || hasPlainText)) {
-      markupResponseElement.classList.add('no-x-scroll');
+  if (assistantConfig['enableAutoScaling'] || hasPlainText) {
+    mainArea
+      .querySelector('.assistant-markup-response')
+      .classList.add('no-x-scroll');
   }
-
 
   if (hasDefinition) {
     hasDefinition.setAttribute(
       'onclick',
-      "document.querySelector('audio')?.play()", // Optional chaining for audio element
+      "document.querySelector('audio').play()",
     );
 
     hasDefinition.setAttribute('style', 'cursor: pointer;');
@@ -3055,7 +3878,7 @@ async function displayScreenData(screen, pushToHistory = false, theme = null) {
 
   let existingStyle;
 
-  if (element && (assistantConfig['enableAutoScaling'] || hasPlainText)) { // Check element exists
+  if (assistantConfig['enableAutoScaling'] || hasPlainText) {
     while (element != null && !hasPhotoCarousel) {
       existingStyle = element.getAttribute('style');
       element.setAttribute(
@@ -3071,80 +3894,214 @@ async function displayScreenData(screen, pushToHistory = false, theme = null) {
   if (hasTextContainer) {
     // Includes Text Response and Google Images Response
 
-     // Ensure mainArea exists before modifying innerHTML
-    if (mainArea) {
-        mainArea.innerHTML = `
-        <img src="../res/Google_Assistant_logo.svg" style="
-            height: 25px;
-            position: absolute;
-            top: 20px;
-            left: 20px;
-        ">
-        ${mainArea.innerHTML}
-        `;
-    }
+    mainArea.innerHTML = `
+      <img src="../res/Google_Assistant_logo.svg" style="
+        height: 25px;
+        position: absolute;
+        top: 20px;
+        left: 20px;
+      ">
+      ${mainArea.innerHTML}
+    `;
   }
 
   if (hasPlainText) {
-     const textContentElement = document.querySelector('.show_text_content');
-     // Ensure textContentElement exists before accessing innerText
-     const innerText = textContentElement ? textContentElement.innerText : '';
+    const { innerText } = document.querySelector('.show_text_content');
     responseType = inspectResponseType(innerText);
 
     const textContainer = document.querySelector('.show_text_container');
 
-     // Ensure textContainer exists before modifying
-    if (textContainer && responseType['type']) {
+    if (responseType['type']) {
       if (
         responseType['type'] === 'google-search-result'
         || responseType['type'] === 'youtube-result'
       ) {
-         // ... (código existente para search/youtube result) ...
+        let youtubeThumbnailUrl;
+
+        if (responseType['type'] === 'youtube-result') {
+          const youtubeVideoId = responseType['searchResultParts'][2]
+            .match(/.*watch\?v=(.+)/)
+            .pop();
+
+          youtubeThumbnailUrl = `https://img.youtube.com/vi/${youtubeVideoId}/0.jpg`;
+        }
+
+        textContainer.innerHTML = `
+          <div
+            class="google-search-result"
+            data-url="${responseType['searchResultParts'][2]}"
+          >
+            <div style="font-size: 22px;">
+              ${responseType['searchResultParts'][0]}
+            </div>
+
+            <div style="opacity: 0.502; padding-top: 5px;">
+              ${responseType['searchResultParts'][2]}
+            </div>
+
+            <hr color="#ffffff" style="opacity: 0.25;">
+
+            <div style="${
+              responseType['type'] === 'youtube-result' ? 'display: flex;' : ''
+            }">
+              ${
+                responseType['type'] === 'youtube-result'
+                  ? `
+                    <img
+                      class="${getEffectiveTheme() === 'light' ? 'invert' : ''}
+                      src="${youtubeThumbnailUrl}"
+                      style="
+                        height: 131px;
+                        margin-right: 15px;
+                        border-radius: 10px;
+                      "
+                    >`
+                  : ''
+              }
+              <div style="padding-top: 10px;">
+                ${
+                  responseType['searchResultParts'][3]
+                    ? responseType['searchResultParts'][3].replace(/\\n/g, '<br>')
+                    : ''
+                }
+              </div>
+            </div>
+          </div>
+        `;
       }
       else if (responseType['type'] === 'google-search-result-prompt') {
         activateLoader();
 
-        try { // Wrap googleIt in try-catch
-            const searchResults = await googleIt({
-                query: getCurrentQuery(),
-                'no-display': true,
-            });
+        const searchResults = await googleIt({
+          query: getCurrentQuery(),
+          'no-display': true,
+        });
 
-             // Check if searchResults exist and have at least one result
-             if (searchResults && searchResults.length > 0) {
-                 const topResult = searchResults[0];
-                 // ... (código existente para mostrar resultado) ...
-                  textContainer.innerHTML = googleSearchResultScreenData;
-             } else {
-                 console.warn("Google search returned no results for:", getCurrentQuery());
-                 textContainer.innerHTML = "<p>Sorry, I couldn't find relevant search results.</p>";
-             }
+        const topResult = searchResults[0];
 
-        } catch (searchError) {
-            console.error("Error performing Google search:", searchError);
-            textContainer.innerHTML = "<p>Sorry, there was an error searching Google.</p>";
-        } finally {
-             deactivateLoader();
-        }
+        const googleSearchResultScreenData = `
+          <div
+            class="google-search-result"
+            data-url="${topResult.link}"
+          >
+            <div style="font-size: 22px;">
+              ${topResult.title}
+            </div>
 
+            <div style="opacity: 0.502; padding-top: 5px;">
+              ${topResult.link}
+            </div>
+
+            <hr color="#ffffff" style="opacity: 0.25;">
+
+            <div style="padding-top: 10px;">
+              ${topResult.snippet}
+            </div>
+          </div>
+        `;
+
+        textContainer.innerHTML = googleSearchResultScreenData;
+        deactivateLoader();
       }
     }
 
-     // Check if innerText is available before checking for URL
-    if (innerText && innerText.indexOf('https://www.google.com/search?tbm=isch') !== -1) {
-      // Google Images (código existente)
-      // ...
-      // Asegurarse que los elementos existen antes de usarlos dentro del try/catch
-      // ...
-       const googleImagesCarousel = mainArea.querySelector(
-          '#google-images-carousel',
-       );
-        if (!googleImagesCarousel) {
-             console.error("Google Images carousel element not found.");
-             // Handle error appropriately, maybe display a message
-             return;
-         }
-        // ... resto del código de Google Images
+    if (innerText.indexOf('https://www.google.com/search?tbm=isch') !== -1) {
+      // Google Images
+      isGoogleImagesContent = true;
+      textContainer.innerHTML = '<div id="google-images-carousel"></div>';
+
+      const imageSubject = encodeURIComponent(getCurrentQuery());
+      const googleImagesUrl = `https://images.google.com/search?tbm=isch&q=${imageSubject}&sfr=gws&gbv=1&sei=n37GXpmUFviwz7sP4KmZuA0`;
+      const googleImagesCarousel = mainArea.querySelector(
+        '#google-images-carousel',
+      );
+
+      try {
+        const googleImagesResponse = await window.fetch(googleImagesUrl);
+
+        if (googleImagesResponse.ok) {
+          // Page loaded
+          const googleImagesPage = parser.parseFromString(
+            await googleImagesResponse.text(),
+            'text/html',
+          );
+
+          const allImages = googleImagesPage.querySelectorAll('table img');
+
+          for (let i = 0; i < 20; i++) {
+            const currentImage = allImages[i];
+
+            googleImagesCarousel.innerHTML += `
+              <span>
+                <img
+                  style="height: 40vh; margin-right: 5px;"
+                  src="${currentImage.getAttribute('src')}"
+                />
+              </span>
+            `;
+          }
+        }
+        else {
+          console.error('Error: Response Object', googleImagesResponse);
+
+          let errorDetails = 'Assistant cannot fetch images due to malformed request';
+          let subdetails = `Error: HTTP status code ${googleImagesResponse.status}`;
+
+          if (googleImagesResponse.status === 429) {
+            // Rate limit exceeded
+            errorDetails = 'Too many requests sent in given time. Rate limit exceeded.';
+            subdetails = 'Error: 429 Too Many Requests';
+          }
+          else {
+            suggestionArea.querySelector('.suggestion-parent').innerHTML += `
+              <div class="suggestion" onclick="retryRecent(false)">
+                <span>
+                  <img src="../res/refresh.svg" style="
+                    height: 20px;
+                    width: 20px;
+                    vertical-align: top;
+                    padding-right: 5px;
+                    ${
+                      getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''
+                    }"
+                  >
+                </span>
+                Retry
+              </div>
+            `;
+          }
+
+          displayErrorScreen({
+            title: 'Failed to fetch images',
+            details: errorDetails,
+            subdetails,
+          });
+        }
+      }
+      catch (e) {
+        if (e.name === TypeError.name) {
+          displayErrorScreen({
+            title: 'Failed to fetch images',
+            details: 'Assistant cannot fetch images due to internet issues.',
+            subdetails: 'Error: Internet not available',
+          });
+
+          suggestionArea.querySelector('.suggestion-parent').innerHTML += `
+            <div class="suggestion" onclick="retryRecent(false)">
+              <span>
+                <img src="../res/refresh.svg" style="
+                  height: 20px;
+                  width: 20px;
+                  vertical-align: top;
+                  padding-right: 5px;
+                  ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+                >
+              </span>
+              Retry
+            </div>
+          `;
+        }
+      }
     }
     else {
       isGoogleImagesContent = false;
@@ -3154,7 +4111,7 @@ async function displayScreenData(screen, pushToHistory = false, theme = null) {
     responseType = inspectResponseType('');
   }
 
-  if (hasPhotoCarousel && element) { // Check element exists
+  if (hasPhotoCarousel) {
     const images = element.querySelectorAll('img[data-src]');
 
     for (let i = 0; i < images.length; i++) {
@@ -3175,41 +4132,149 @@ async function displayScreenData(screen, pushToHistory = false, theme = null) {
   }
 
   // Set Suggestion Area
+
   const suggestionsDOM = htmlDocument.querySelector('#assistant-scroll-bar');
   const suggestionParent = document.querySelector('.suggestion-parent');
 
-    // Ensure suggestionParent exists before modifying
-  if (suggestionParent) {
-      if (suggestionsDOM != null || responseType['type'] === 'google-search-result-prompt') {
-           // ... (código existente para añadir botones de búsqueda/imágenes/fotos) ...
-
-          if (responseType['type'] || hasWebAnswer || hasKnowledgePanel) { /* ... */ }
-          if (isGoogleImagesContent) { /* ... */ }
-          if (hasPhotoCarousel) { /* ... */ }
-
-          for (let i = 0; i < suggestionsDOM?.children.length; i++) { // Optional chaining
-              // ... (código existente para añadir sugerencias) ...
-          }
-      } else {
-          suggestionParent.innerHTML = `
-          <span style="opacity: 0.502;">
-              ${supportedLanguages[assistantConfig['language']]?.noSuggestionsText || 'No suggestions available.'}
+  if (suggestionsDOM != null || responseType['type'] === 'google-search-result-prompt') {
+    if (responseType['type'] || hasWebAnswer || hasKnowledgePanel) {
+      suggestionParent.innerHTML += `
+        <div class="suggestion" onclick="openLink('https://google.com/search?q=${getCurrentQuery()}')" data-flag="action-btn">
+          <span>
+            <img src="../res/google-logo.png" style="
+              height: 20px;
+              width: 20px;
+              vertical-align: top;
+              padding-right: 5px;"
+            >
           </span>
-          `;
-      }
-  }
+          Search
+        </div>
+      `;
+    }
 
+    if (isGoogleImagesContent) {
+      suggestionParent.innerHTML += `
+        <div class="suggestion" onclick="openLink('https://www.google.com/search?tbm=isch&q=${
+          encodeURIComponent(
+            getCurrentQuery(),
+          )
+        }')" data-flag="action-btn">
+          <span>
+            <img src="../res/google-logo.png" style="
+              height: 20px;
+              width: 20px;
+              vertical-align: top;
+              padding-right: 5px;"
+            >
+          </span>
+          Google Images
+        </div>
+      `;
+    }
+
+    if (hasPhotoCarousel) {
+      const currentQuery = getCurrentQuery();
+      const separatorIndex = Math.min(
+        currentQuery.indexOf('of') !== -1
+          ? currentQuery.indexOf('of')
+          : Infinity,
+        currentQuery.indexOf('from') !== -1
+          ? currentQuery.indexOf('from')
+          : Infinity,
+      );
+      const subject = currentQuery
+        .slice(separatorIndex)
+        .replace(/(^of|^from)\s/, '');
+
+      let photosUrl = 'https://photos.google.com/';
+
+      if (subject) {
+        photosUrl += `search/${subject}`;
+      }
+
+      suggestionParent.innerHTML += `
+        <div class="suggestion" onclick="openLink('${photosUrl}')" data-flag="action-btn">
+          <span>
+            <img src="../res/google-photos.svg" style="
+              height: 20px;
+              width: 20px;
+              vertical-align: top;
+              padding-right: 5px;"
+            >
+          </span>
+          Google Photos
+        </div>
+      `;
+    }
+
+    for (let i = 0; i < suggestionsDOM?.children.length; i++) {
+      const label = suggestionsDOM.children[i].innerHTML.trim();
+      const query = suggestionsDOM.children[i].getAttribute('data-follow-up-query');
+      let action = query;
+
+      if (
+        suggestionsDOM.children[i].getAttribute('data-flag') !== 'action-btn'
+      ) {
+        action = `assistantTextQuery(\`${escapeQuotes(query)}\`)`;
+      }
+
+      suggestionParent.innerHTML += `
+        <div class="suggestion" onclick="${action}">${label}</div>
+      `;
+    }
+  }
+  else {
+    suggestionParent.innerHTML = `
+      <span style="opacity: 0.502;">
+        ${supportedLanguages[assistantConfig['language']].noSuggestionsText}
+      </span>
+    `;
+  }
 
   // Register horizontal scrolling for suggestion area
   registerHorizontalScroll(suggestionArea);
 
   // Apply horizontal scrolling behavior for carousels
-  // ... (código existente para carousels) ...
 
+  let carouselDOM;
+
+  if (hasCarousel || hasPhotoCarousel) {
+    carouselDOM = document.querySelector('.assistant-markup-response')
+      .lastElementChild;
+  }
+  else if (document.querySelector('#google-images-carousel')) {
+    carouselDOM = document.querySelector('.assistant-markup-response')
+      .lastElementChild.lastElementChild;
+  }
+  else if (document.querySelector('#tv-item-container')) {
+    carouselDOM = document.querySelector(
+      '.assistant-markup-response #tv-item-container',
+    );
+  }
+
+  registerHorizontalScroll(carouselDOM, false);
 
   // Push to History
+
   if (pushToHistory && mainArea.querySelector('.error-area') == null) {
-      // ... (código existente para push to history) ...
+    let screenData;
+
+    if (isGoogleImagesContent || responseType['type'] === 'google-search-result-prompt') {
+      screenData = generateScreenData(true);
+    }
+    else {
+      screenData = screen;
+    }
+
+    history.push({
+      query: getCurrentQuery(),
+      'screen-data': screenData,
+    });
+
+    historyHead = history.length - 1;
+    queryHistoryHead = history.length;
+    updateNav();
   }
 
   if (isGoogleImagesContent && getEffectiveTheme() === 'light') {
@@ -3228,15 +4293,8 @@ async function displayScreenData(screen, pushToHistory = false, theme = null) {
  */
 function generateScreenData(includePreventAutoScaleFlag = false) {
   const assistantMarkupResponse = document.querySelector('.assistant-markup-response');
-   // Check if the element exists
-  if (!assistantMarkupResponse) {
-    console.error("Cannot generate screen data: .assistant-markup-response not found.");
-    // Return a default or empty screen data object
-    return { format: 'HTML', data: Buffer.from('<html><body>Error generating screen data</body></html>', 'utf-8') };
-  }
 
-
-  if (includePreventAutoScaleFlag && assistantMarkupResponse.lastElementChild) { // Check lastElementChild exists
+  if (includePreventAutoScaleFlag) {
     assistantMarkupResponse.lastElementChild.setAttribute(
       'data-flag',
       'prevent-auto-scale',
@@ -3249,28 +4307,21 @@ function generateScreenData(includePreventAutoScaleFlag = false) {
     </div>
   `;
 
-  const suggestionParent = document.querySelector('.suggestion-parent');
-  // Check if suggestionParent exists
-  const suggestions = suggestionParent ? suggestionParent.children : [];
+  const suggestions = document.querySelector('.suggestion-parent').children;
   let suggestionsDOM = '';
 
-  if (suggestions.length > 0 && suggestions[0]?.classList.contains('suggestion')) { // Optional chaining for classList
+  if (suggestions.length > 0 && suggestions[0].classList.contains('suggestion')) {
     for (let i = 0; i < suggestions.length; i++) {
       const flag = suggestions[i].getAttribute('data-flag');
       const flagAttrib = flag ? `data-flag="${flag}"` : '';
       const label = suggestions[i].innerHTML.trim();
-      const onclickAttr = suggestions[i].getAttribute('onclick'); // Get onclick attribute
 
-       // Ensure onclickAttr exists and try to extract query
-       let followUpQuery = '';
-       if (onclickAttr) {
-           const match = onclickAttr.match(/assistantTextQuery\(`(.*)`\)/);
-           followUpQuery = match ? match[1] : onclickAttr; // Fallback to full onclick if regex fails
-       }
-
+      const followUpQuery = suggestions[i]
+        .getAttribute('onclick')
+        .replace(/assistantTextQuery\(`(.*)`\)/, '$1');
 
       suggestionsDOM += `
-      <button data-follow-up-query="${escapeQuotes(followUpQuery)}" ${flagAttrib}> <!-- Escape query -->
+      <button data-follow-up-query="${followUpQuery}" ${flagAttrib}>
         ${label}
       </button>
       `;
@@ -3359,9 +4410,8 @@ function setAssistantWindowBorder() {
 
   document
     .querySelector('#master-bg')
-    ?.setAttribute('data-border', windowBorderValue); // Optional chaining
+    .setAttribute('data-border', windowBorderValue);
 }
-
 
 /**
  * Toggle Expand/Collapse Assistant Window.
@@ -3374,20 +4424,14 @@ function setAssistantWindowBorder() {
 function toggleExpandWindow(shouldExpandWindow) {
   if (shouldExpandWindow != null) expanded = !shouldExpandWindow;
 
-  // Ensure expandCollapseButton exists before setting attribute
-  if (expandCollapseButton) {
-    if (!expanded) {
-      assistantWindow.setSize(screen.availWidth - 20, 450);
-      expandCollapseButton.setAttribute('src', '../res/collapse_btn.svg'); // Change to 'collapse' icon after expanding
-    }
-    else {
-      assistantWindow.setSize(1000, 420);
-      expandCollapseButton.setAttribute('src', '../res/expand_btn.svg'); // Change to 'expand' icon after collapsing
-    }
-  } else {
-      console.warn("Expand/collapse button not found.");
+  if (!expanded) {
+    assistantWindow.setSize(screen.availWidth - 20, 450);
+    expandCollapseButton.setAttribute('src', '../res/collapse_btn.svg'); // Change to 'collapse' icon after expanding
   }
-
+  else {
+    assistantWindow.setSize(1000, 420);
+    expandCollapseButton.setAttribute('src', '../res/expand_btn.svg'); // Change to 'expand' icon after collapsing
+  }
 
   setAssistantWindowPosition();
   expanded = !expanded;
@@ -3456,12 +4500,7 @@ function displayQuickMessage(message, allowOnlyOneMessage = false) {
 
   navRegion.appendChild(elt);
   elt.className = 'quick-msg';
-  setTimeout(() => {
-      // Check if elt still exists before removing
-      if (navRegion.contains(elt)) {
-          navRegion.removeChild(elt);
-      }
-  }, 5000);
+  setTimeout(() => navRegion.removeChild(elt), 5000);
 }
 
 /**
@@ -3483,9 +4522,6 @@ function markInputAsInvalid(
   addShakeAnimation = false,
   scrollIntoView = true,
 ) {
-   // Ensure inputElement exists
-   if (!inputElement) return;
-
   inputElement.classList.add(['input-err']);
 
   if (addShakeAnimation) {
@@ -3506,15 +4542,12 @@ function markInputAsInvalid(
  * The target `input` DOM Element
  */
 function markInputAsValid(inputElement) {
-  // Ensure inputElement exists
-  if (!inputElement) return;
   inputElement.classList.remove(['input-err']);
 }
 
-
 /**
  * Checks the `inputElement` and returns `true` when the path
- * is valid and exists in the system. (Less critical if paths are optional)
+ * is valid and exists in the system.
  *
  * @param {Element} inputElement
  * The `input` DOM Element to be validated
@@ -3539,18 +4572,7 @@ function validatePathInput(
   scrollIntoView = true,
   trimSpaces = true,
 ) {
-   // Ensure inputElement exists
-   if (!inputElement) return false; // Or handle error
-
   const val = trimSpaces ? inputElement.value.trim() : inputElement.value;
-
-    // --- MODIFICACIÓN: Considerar campo vacío como válido si es opcional ---
-    if (val === '') {
-         markInputAsValid(inputElement);
-         return true; // Empty path might be acceptable now
-    }
-    // --- FIN MODIFICACIÓN ---
-
 
   if (val !== '' && !fs.existsSync(val)) {
     markInputAsInvalid(inputElement, addShakeAnimationOnError, scrollIntoView);
@@ -3561,58 +4583,345 @@ function validatePathInput(
   return true;
 }
 
-// --- MODIFICACIÓN: Reemplazar contenido de showGetTokenScreen ---
 /**
- * Initiates the server authentication flow.
- * This function is called by the Google Assistant library when it needs authentication.
+ * Display the "Get Token" screen if no tokens are found.
  *
- * @param {function} _oauthValidationCallback - (No longer directly used) Original callback from the library.
- * @param {string} _authUrl - (No longer directly used) Original auth URL from the library.
+ * _(Call is initiated by the Google Assistant auth library)_
+ *
+ * @param {function} oauthValidationCallback
+ * The callback to process the OAuth Code.
+ *
+ * @param {string} authUrl
+ * The URL for getting auth code for a Google Account
+ * _(Typically to be used when the browser fails to open)_
  */
-function showGetTokenScreen(_oauthValidationCallback, _authUrl) {
-  console.log(...consoleMessage("Authentication required by library, starting server auth flow..."));
-  initScreenFlag = 0; // Mark that we are in an auth flow screen
+function showGetTokenScreen(oauthValidationCallback, authUrl) {
+  initScreenFlag = 0;
 
-  // Opcional: Mostrar una pantalla de "Redirigiendo al login..."
-   mainArea.innerHTML = `
-     <div class="fade-in-from-bottom" style="text-align: center; padding-top: 100px;">
-       <div style="font-size: 24px; margin-bottom: 20px;">Redirecting to Login Server...</div>
-       <div class="loader" style="margin: 0 auto;"></div> <!-- Opcional: un spinner -->
-       <div style="margin-top: 30px; opacity: 0.7;">
-           If the browser window doesn't open automatically, please check your pop-up blocker or contact support.
-       </div>
-     </div>
-   `;
-   suggestionArea.innerHTML = '<div class="suggestion-parent"></div>'; // Limpiar sugerencias
+  mainArea.innerHTML = `
+    <div class="fade-in-from-bottom">
+      <span
+        style="
+          display: none;
+          cursor: default;
+          font-size: 17px;
+          padding: 5px 10px;
+          background: ${
+            getComputedStyle(
+              document.documentElement,
+            ).getPropertyValue('--color-fg')
+          }22;
+          opacity: 0.502;
+          vertical-align: middle;
+          border-radius: 5px;
+          position: absolute;
+          top: 32px;
+          right: 42%;
+        "
 
-   // Llamar a la función de autenticación del servidor
-   startServerAuth();
+        id="countdown"
+      >
+        Countdown timer
+      </span>
+      <div class="no-auth-grid" name="get-token" style="margin-top: 60px;">
+        <div class="no-auth-grid-icon">
+          <img src="../res/auth.svg" alt="Auth" />
+        </div>
+        <div class="no-auth-grid-info">
+          <div style="font-size: 35px;">
+            Get token!
+          </div>
 
-   // La lógica original que creaba la UI para pegar el código se elimina completamente.
+          <div style="
+            margin-top: 12px;
+            opacity: 0.502;
+          ">
+            A new browser window is being opened.
+            Login/Select a Google account, accept the permissions and paste the authentication code below.
+          </div>
+
+          <input
+            id="auth-code-input"
+            class="config-input"
+            placeholder="Paste the code..."
+            style="margin-top: 20px;"
+          />
+
+          <a
+            onclick="openLink('https://github.com/Melvin-Abraham/Google-Assistant-Unofficial-Desktop-Client/wiki/Setup-Authentication-for-Google-Assistant-Unofficial-Desktop-Client#configure-credentials')"
+            name="configure-creds-link"
+            style="
+              display: none;
+              font-size: 16px;
+              margin-top: 24px;
+              color: var(--color-accent);
+            "
+          >
+              Read updated Credential Configuration Guide
+          </a>
+        </div>
+      </div>
+    </div>
+  `;
+
+  suggestionArea.innerHTML = '<div class="suggestion-parent"></div>';
+  const suggestionParent = document.querySelector('.suggestion-parent');
+
+  suggestionParent.innerHTML = `
+    <div id="submit-btn" class="suggestion">
+      <span>
+        <img src="../res/done.svg" style="
+          height: 20px;
+          width: 20px;
+          vertical-align: top;
+          padding-right: 5px;"
+        >
+      </span>
+      Submit
+    </div>
+
+    <div id="open-settings-btn" class="suggestion" onclick="openConfig()">
+      Open Settings
+    </div>
+
+    <div id="browser-open-failed-btn" class="suggestion">
+      Browser didn't open
+    </div>
+  `;
+
+  suggestionArea.querySelector('#browser-open-failed-btn').onclick = () => {
+    const result = displayDialog({
+      type: 'info',
+      message: 'Your Browser failed to open the link?',
+      detail: [
+        'You may try the following:',
+        '',
+        '1. Check if your browser is minimized. It is possible that your browser did open the link but didn\'t show up in foreground.',
+        '2. If that\'s not the case, you may try opening the link again by clicking on "Retry"',
+        '3. If none of these work, you may copy the auth link and paste it manually in the browser.',
+      ].join('\n'),
+      buttons: [
+        'Copy Auth Link',
+        'Retry',
+        'Close',
+      ],
+      cancelId: 2,
+    });
+
+    switch (result) {
+      case 0:
+        electron.clipboard.writeText(authUrl);
+        break;
+
+      case 1:
+        electronShell.openExternal(authUrl);
+        break;
+
+      default:
+        // no-op
+    }
+  };
+
+  suggestionArea.querySelector('#submit-btn').onclick = () => {
+    const isAuthCodeProcessingInProgress = document
+      .querySelector('.no-auth-grid')
+      .classList.contains('disabled');
+
+    if (isAuthCodeProcessingInProgress) {
+      console.log("Can't submit while receiving tokens...");
+      return;
+    }
+
+    const oauthInput = mainArea.querySelector('#auth-code-input');
+    const oauthCode = oauthInput.value;
+
+    oauthInput.onchange = () => {
+      markInputAsValid(oauthInput);
+    };
+
+    if (!oauthCode) {
+      markInputAsInvalid(oauthInput, true);
+      return;
+    }
+
+    document.querySelector('#loader-area').innerHTML = `
+      <div class="determinate-progress progress-countdown-ten-secs"></div>
+    `;
+
+    // Disable suggestions
+
+    document.querySelector('.no-auth-grid').classList.add('disabled');
+    document.querySelector('#submit-btn').classList.add('disabled');
+    document.querySelector('#open-settings-btn').classList.add('disabled');
+    document.querySelector('#open-settings-btn').onclick = '';
+
+    // Init. Countdown
+
+    document.querySelector('#countdown').style.display = 'unset';
+    document.querySelector('#countdown').innerHTML = 'Please wait for 10s';
+    let secs = 9;
+
+    const countdownIntervalId = setInterval(() => {
+      if (secs === 0) {
+        document.querySelector('#loader-area').innerHTML = '';
+        document.querySelector('.no-auth-grid').classList.remove('disabled');
+        document.querySelector('#countdown').style.display = 'none';
+
+        let tokensString;
+
+        try {
+          tokensString = fs.readFileSync(config.auth.savedTokensPath);
+        }
+        catch (error) {
+          // If file doesn't exist
+
+          console.group(...consoleMessage(
+            'Error occurred while saving tokens',
+            'error',
+          ));
+          console.error(error);
+          console.groupEnd();
+
+          tokensString = '';
+        }
+
+        if (tokensString.length) {
+          // Tokens were saved
+
+          console.groupCollapsed(...consoleMessage('Tokens saved'));
+          console.log(tokensString);
+          console.groupEnd();
+
+          displayQuickMessage('Tokens saved', true);
+
+          setTimeout(() => {
+            displayErrorScreen({
+              icon: {
+                path: '../res/refresh.svg',
+                style: `
+                  height: 100px;
+                  animation: rotate_anim 600ms cubic-bezier(0.48, -0.4, 0.26, 1.3);
+                  ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}
+                `,
+              },
+              title: 'Relaunch Required',
+              details: 'A relaunch is required for changes to take place',
+              subdetails: 'Info: Tokens saved',
+            });
+
+            // eslint-disable-next-line no-shadow
+            const suggestionParent = document.querySelector('.suggestion-parent');
+
+            suggestionParent.innerHTML = `
+              <div class="suggestion" onclick="relaunchAssistant()">
+                <span>
+                  <img src="../res/refresh.svg" style="
+                    height: 20px;
+                    width: 20px;
+                    vertical-align: top;
+                    padding-right: 5px;
+                    ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+                  >
+                </span>
+                Relaunch Assistant
+              </div>
+            `;
+          }, 1000);
+        }
+        else {
+          // Failed to save tokens
+
+          displayErrorScreen({
+            title: 'Failed to get Tokens',
+            details:
+              'Assistant failed to fetch the tokens from server. Either the auth code is invalid or the rate limit might have exceeded.<br>Try selecting a different Google Account.',
+            subdetails: 'Error: Error getting tokens',
+            customStyle: 'top: 80px;',
+          });
+
+          suggestionParent.innerHTML = `
+            <div class="suggestion" onclick="openConfig()">
+              <span>
+                <img src="../res/settings.svg" style="
+                  height: 20px;
+                  width: 20px;
+                  vertical-align: top;
+                  padding-right: 10px;
+                  ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+                >
+              </span>
+              Open Settings
+            </div>
+            <div class="suggestion" id="oauth-retry-btn">
+              Retry
+            </div>
+          `;
+        }
+
+        document.querySelector('#oauth-retry-btn').onclick = () => {
+          showGetTokenScreen(oauthValidationCallback);
+        };
+
+        clearInterval(countdownIntervalId);
+      }
+
+      document.querySelector('#countdown').innerHTML = `Please wait for ${secs}s`;
+      secs--;
+    }, 1000);
+
+    try {
+      oauthValidationCallback(oauthCode);
+    }
+    catch (error) {
+      console.group(...consoleMessage('Error fetching tokens', 'error'));
+      console.error(error);
+      console.groupEnd();
+
+      displayErrorScreen({
+        title: 'Failed to get Tokens',
+        details:
+          'Due to some unexpected exception, assistant failed to get the tokens from server.',
+        subdetails: 'Error: Error getting tokens',
+      });
+
+      suggestionParent.innerHTML = `
+        <div class="suggestion" id="oauth-retry-btn">
+          Retry
+        </div>
+      `;
+
+      document.querySelector('#oauth-retry-btn').onclick = () => {
+        showGetTokenScreen(oauthValidationCallback);
+      };
+    }
+  };
+
+  // Show the user new link to configure credential guide
+  // if not already using updated oauth key file
+  if (fs.existsSync(config.auth.keyFilePath)) {
+    const oauthKey = JSON.parse(fs.readFileSync(config.auth.keyFilePath));
+
+    // Check if the oauth key file uses old redirect URI or type
+    const isOldKeyFile = (
+      oauthKey.web === undefined
+      || !oauthKey.web.redirect_uris[0].startsWith('http://localhost:5754')
+    );
+
+    if (isOldKeyFile) {
+      const configureCredsGuideLink = document.querySelector('a[name=configure-creds-link]');
+      configureCredsGuideLink.style.display = 'block';
+
+      const getTokenView = document.querySelector('[name=get-token]');
+      getTokenView.style.marginTop = '30px';
+    }
+  }
 }
-// --- FIN MODIFICACIÓN ---
-
 
 /**
  * Sets the initial screen.
  */
 function setInitScreen() {
-  // --- MODIFICACIÓN: Solo mostrar pantalla inicial si NO estamos en flujo de auth ---
-   if (!initScreenFlag) {
-       console.log("Skipping init screen because initScreenFlag is 0 (likely in auth flow).");
-       return;
-   }
-  // --- FIN MODIFICACIÓN ---
-
-   // --- MODIFICACIÓN: Verificar si se requiere login antes de mostrar pantalla inicial ---
-   // (Esto es redundante si ya se hizo throw Error antes, pero como doble chequeo)
-   const needsLogin = assistantConfig['keyFilePath'] === '' && localStorage.getItem('isLoggedIn') !== 'true';
-   if (needsLogin && !document.querySelector('.error-area')) { // Evitar si ya hay error
-       console.log("Init screen check: Needs login, showing login prompt instead.");
-       showLoginRequiredScreen(); // Llama a una función que muestre el prompt de login
-       return; // No mostrar la pantalla de bienvenida normal
-   }
-   // --- FIN MODIFICACIÓN ---
+  if (!initScreenFlag) return;
 
   mainArea.innerHTML = `
     <div class="init">
@@ -3622,23 +4931,19 @@ function setInitScreen() {
 
       <div id="init-headline-parent">
         <div id="init-headline">
-          ${supportedLanguages[assistantConfig['language']]?.welcomeMessage || 'Hi, how can I help?'}
+          ${supportedLanguages[assistantConfig['language']].welcomeMessage}
         </div>
       </div>
     </div>
   `;
 
-    // Ensure language and suggestions exist
-   const langData = supportedLanguages[assistantConfig['language']];
-   const suggestions = langData?.initSuggestions || [];
-
-
   suggestionArea.innerHTML = `
   <div class="suggestion-parent">
-    ${suggestions.map((suggestionObj) => `
+    ${supportedLanguages[assistantConfig['language']].initSuggestions
+    .map((suggestionObj) => `
         <div
           class="suggestion"
-          onclick="assistantTextQuery('${escapeQuotes(suggestionObj.query)}')" <!-- Escape query -->
+          onclick="assistantTextQuery('${suggestionObj.query}')"
         >
           ${suggestionObj.label}
         </div>
@@ -3647,50 +4952,16 @@ function setInitScreen() {
   </div>`;
 
   initHeadline = document.querySelector('#init-headline');
-  // Ensure assistantInput exists before setting placeholder
-   if (assistantInput) {
-       assistantInput.placeholder = langData?.inputPlaceholder || 'Type or speak your query...';
-   }
-
+  assistantInput.placeholder = supportedLanguages[assistantConfig['language']].inputPlaceholder;
 }
-
-// --- MODIFICACIÓN: Función auxiliar para mostrar pantalla de login ---
-function showLoginRequiredScreen() {
-     mainArea.innerHTML = `
-       <div class="fade-in-from-bottom">
-         <div style="margin: 30px 10px 8px 10px;">
-           <div style="font-size: 30px; margin-top: 30px;">Login Required</div>
-           <div style="font-size: 21px; opacity: 0.502;">Please login to use Google Assistant.</div>
-         </div>
-         <div class="no-auth-grid">
-           <div class="no-auth-grid-icon"><img src="../res/auth.svg" alt="Auth" /></div>
-           <div class="no-auth-grid-info"><div>Click the button below to login via the server.</div></div>
-         </div>
-       </div>
-     `;
-     const suggestionParent = document.querySelector('.suggestion-parent');
-     suggestionParent.innerHTML = `
-       <div class="suggestion" onclick="startServerAuth()">
-         <span><img src="../res/login.svg" style="height: 15px; width: 15px; vertical-align: text-top; padding-right: 5px; ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"></span>
-         Login with Server
-       </div>
-     `;
-     if(assistantMicrophone) {
-         assistantMicrophone.id = '';
-         assistantMicrophone.classList.add('assistant-mic-disabled');
-     }
-     initScreenFlag = 0; // Marcar que estamos en pantalla de auth/login
-}
-// --- FIN MODIFICACIÓN ---
-
 
 /**
  * Turns off mic and stops output stream of the audio player.
  * Typically called before the window is closed.
  */
 function stopAudioAndMic() {
-  if (mic) mic.stop();
-  if (audPlayer) audPlayer.stop();
+  mic.stop();
+  audPlayer.stop();
 }
 
 /**
@@ -3736,79 +5007,110 @@ function getEffectiveTheme(theme = null) {
  * _(Defaults to `true`)_
  */
 function setTheme(theme = null, forceAssistantResponseThemeChange = true) {
-    // ... (código existente de setTheme) ...
-     const effectiveTheme = getEffectiveTheme(theme || assistantConfig.theme);
-     const themeLabel = effectiveTheme === 'light' ? 'light-theme' : 'dark-theme';
+  const effectiveTheme = getEffectiveTheme(theme || assistantConfig.theme);
+  const themeLabel = effectiveTheme === 'light' ? 'light-theme' : 'dark-theme';
 
-     Object.keys(themes[themeLabel]).forEach((cssVariable) => {
-       document.documentElement.style.setProperty(
-         cssVariable,
-         themes[themeLabel][cssVariable],
-       );
-     });
+  Object.keys(themes[themeLabel]).forEach((cssVariable) => {
+    document.documentElement.style.setProperty(
+      cssVariable,
+      themes[themeLabel][cssVariable],
+    );
+  });
 
-     console.log(...consoleMessage(
-       `Setting theme: ${effectiveTheme} (${assistantConfig.theme})`,
-     ));
+  console.log(...consoleMessage(
+    `Setting theme: ${effectiveTheme} (${assistantConfig.theme})`,
+  ));
 
-     if (
-       forceAssistantResponseThemeChange
-       && document.querySelector('.assistant-markup-response')
-       && history[historyHead] // Check if history item exists
-     ) {
-       displayScreenData(history[historyHead]['screen-data']);
-     }
+  if (
+    forceAssistantResponseThemeChange
+    && document.querySelector('.assistant-markup-response')
+  ) {
+    displayScreenData(history[historyHead]['screen-data']);
+  }
 
-      document
-        .querySelector('#master-bg')
-        ?.setAttribute('data-theme', effectiveTheme); // Optional chaining
+  document
+    .querySelector('#master-bg')
+    .setAttribute('data-theme', effectiveTheme);
 }
-
 
 /**
  * Returns the string content to display inside About Box
  */
 function getAboutBoxContent() {
-    // ... (código existente de getAboutBoxContent) ...
-    return content;
+  const { commitHash, commitDate } = getCommitInfo();
+  const appVersion = app.getVersion();
+  const nodeVersion = process.versions.node;
+  const v8Version = process.versions.v8;
+  const electronVersion = process.versions.electron;
+  const chromeVersion = process.versions.chrome;
+  const osInfo = [
+    `${os.type()}`,
+    `${os.arch()}`,
+    `${os.release()} ${isSnap() ? 'snap' : ''}`,
+  ].join(' ');
+
+  const commitInfo = commitHash != null
+    ? `Commit ID: ${commitHash}\nCommit Date: ${commitDate}\n`
+    : '';
+
+  const content = [
+    `Version: ${appVersion}`,
+    `${commitInfo}Electron: ${electronVersion}`,
+    `Chrome: ${chromeVersion}`,
+    `Node.js: ${nodeVersion}`,
+    `V8: ${v8Version}`,
+    `OS: ${osInfo.trimEnd()}`,
+  ].join('\n');
+
+  return content;
 }
 
 /**
  * Display "About" Dialog Box.
  */
 function showAboutBox() {
-    // ... (código existente de showAboutBox) ...
+  const info = getAboutBoxContent();
+
+  displayAsyncDialog({
+    type: 'info',
+    title: 'Google Assistant Unofficial Desktop Client',
+    message: 'Google Assistant Unofficial Desktop Client',
+    detail: info,
+    buttons: ['OK', 'Copy'],
+  })
+    .then((result) => {
+      if (result.response === 1) {
+        // If "Copy" is pressed
+        electron.clipboard.writeText(info);
+      }
+    });
 }
 
 /**
  * Display "Command Line Arguments" Dialog Box.
  */
 function showArgsDialog() {
-    // ... (código existente de showArgsDialog) ...
+  const content = process.argv.join('\n    ');
+
+  displayAsyncDialog({
+    type: 'info',
+    title: 'Google Assistant Unofficial Desktop Client',
+    message: 'Command Line Arguments',
+    detail: content,
+    buttons: ['OK', 'Copy'],
+  })
+    .then((result) => {
+      if (result.response === 1) {
+        // If "Copy" is pressed
+        electron.clipboard.writeText(content);
+      }
+    });
 }
 
 /**
  * Start the microphone for transcription and visualization.
  */
 function startMic() {
-   // --- MODIFICACIÓN: Verificar login antes de iniciar micro ---
-   const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
-   if (!isLoggedIn) {
-       console.warn("Cannot start microphone, user not logged in.");
-       displayQuickMessage("Please login first.");
-       showLoginRequiredScreen(); // Mostrar pantalla de login
-       return;
-   }
-   // --- FIN MODIFICACIÓN ---
-
-    // --- MODIFICACIÓN: Verificar si el asistente está listo ---
-    if (!isAssistantReady) {
-        console.warn("Cannot start microphone, assistant not ready yet.");
-        displayQuickMessage("Assistant is not ready yet.");
-        return;
-    }
-    // --- FIN MODIFICACIÓN ---
-
   if (assistantConfig['respondToHotword']) {
     // Disable hotword detection when assistant is listening
     hotwordDetector?.stop();
@@ -3816,10 +5118,9 @@ function startMic() {
 
   if (canAccessMicrophone) {
     if (!mic) mic = new Microphone();
-     mic.start(); // Mover mic.start() aquí, después de las comprobaciones
   }
   else {
-    if(audPlayer) audPlayer.playPingStop(); // Check audPlayer exists
+    audPlayer.playPingStop();
     stopMic();
     displayQuickMessage('Microphone is not accessible', true);
     return;
@@ -3830,16 +5131,11 @@ function startMic() {
   }
 
   // Prevent triggering microphone when assistant
-  // has not been initialized. (Doble chequeo)
+  // has not been initialized.
   if (!isAssistantReady) return;
 
-  // Iniciar conversación con el asistente
-  if (assistant) { // Check assistant exists
-      assistant.start(config.conversation);
-  } else {
-      console.error("Cannot start conversation: Assistant object not initialized.");
-  }
-
+  mic.start();
+  assistant.start(config.conversation);
 }
 
 /**
@@ -3853,29 +5149,26 @@ function stopMic() {
 
   console.log('STOPPING MICROPHONE...');
   if (mic) mic.stop();
-  if (p5jsMic) p5jsMic.stop(); // Check p5jsMic exists
+  p5jsMic.stop();
 
   if (initHeadline) {
-    initHeadline.innerText = supportedLanguages[assistantConfig['language']]?.welcomeMessage || 'Hi, how can I help?'; // Check language exists
+    initHeadline.innerText = supportedLanguages[assistantConfig['language']].welcomeMessage;
   }
 
   // Set the `Assistant Mic` icon
+
   const assistantMicrophoneParent = document.querySelector('#assistant-mic-parent');
-   // Ensure parent and icon exist before modification
-  if (assistantMicrophoneParent) {
-      assistantMicrophoneParent.outerHTML = `
-        <div id="assistant-mic-parent" class="fade-scale">
-            <img id="assistant-mic" src="../res/Google_mic.svg" type="icon" alt="Speak">
-        </div>
-      `;
 
-      // Re-assign event listener to the new mic icon
-      assistantMicrophone = document.querySelector('#assistant-mic');
-      if (assistantMicrophone) {
-          assistantMicrophone.onclick = startMic;
-      }
-  }
+  assistantMicrophoneParent.outerHTML = `
+    <div id="assistant-mic-parent" class="fade-scale">
+        <img id="assistant-mic" src="../res/Google_mic.svg" type="icon" alt="Speak">
+    </div>
+  `;
 
+  // Add Event Listener to the `Assistant Mic`
+
+  assistantMicrophone = document.querySelector('#assistant-mic');
+  assistantMicrophone.onclick = startMic;
 }
 
 /**
@@ -3913,8 +5206,32 @@ function isFallbackMode() {
  * (**Requires GIT**)
  */
 function getCommitInfo() {
-    // ... (código existente de getCommitInfo) ...
-    return { commitHash, commitDate };
+  let commitHash;
+  let commitDate;
+
+  try {
+    commitHash = execSync('git rev-parse HEAD').toString().trim();
+    commitDate = execSync('git log -1 --format=%cd').toString().trim();
+  }
+  catch (err) {
+    console.error(err);
+
+    if (app.getAppPath().endsWith('.asar')) {
+      // User is running the release version
+      commitHash = null;
+      commitDate = null;
+    }
+    else {
+      // Either git is not installed or is not found in the path
+      commitHash = '[Git not found in the path]';
+      commitDate = 'Unknown';
+    }
+  }
+
+  return {
+    commitHash,
+    commitDate,
+  };
 }
 
 /**
@@ -3938,26 +5255,116 @@ function getVersion(version) {
  * HTML string.
  */
 function getMicPermEnableHelp() {
-    // ... (código existente de getMicPermEnableHelp) ...
-    return `You can ${defaultMsg.replace(/^M/, 'm')}`;
+  const defaultMsg = 'Manually enable the microphone permissions for "Google Assistant" in the system settings';
+
+  if (process.platform === 'darwin') {
+    // If platform is "MacOS"
+
+    return `
+      You can follow either of the steps:
+      <br />
+
+      <ul>
+        <li>${defaultMsg}</li>
+        <li>
+          Click this button
+
+          <button
+            style="margin-left: 10px;"
+            onclick="electron.remote.systemPreferences.askForMediaAccess('microphone')"
+          >
+            Request microphone permission
+          </button>
+        </li>
+      </ul>
+    `;
+  }
+
+  if (process.platform !== 'win32' && isSnap()) {
+    // If platform is any type of linux distro and application is a snap package.
+
+    return `
+      You can follow either of the steps:
+      <br />
+
+      <ul>
+        <li>${defaultMsg}</li>
+        <li>
+          Type the following command in the <strong>terminal</strong>:
+          <code class="codeblock">sudo snap connect g-assist:audio-record</code>
+        </li>
+      </ul>
+    `;
+  }
+
+  // If platform is "Windows" or any linux distro (application not a snap package)
+  return `You can ${defaultMsg.replace(/^M/, 'm')}`;
 }
 
-// --- MODIFICACIÓN: Quitar función resetSavedTokensFile ---
 /**
- * (DEPRECATED/REMOVED) Deletes the saved tokens file forcing the Get Tokens
- * screen on next start. This is likely not needed with server auth.
+ * Deletes the saved tokens file forcing the Get Tokens
+ * screen on next start.
+ *
+ * @param {boolean} showRelaunchScreen
+ * If set to `true`, the "Relaunch Required" screen will
+ * be shown.
+ *
+ * @param {boolean} showWarning
+ * If set to `true`, the user will see a warning before
+ * any action is taken.
  */
-/*
 function resetSavedTokensFile(showRelaunchScreen = true, showWarning = true) {
-    // ... (código original eliminado) ...
-    console.warn("resetSavedTokensFile is likely deprecated with server auth.");
-    // Consider clearing localStorage state instead if needed:
-    // localStorage.removeItem('isLoggedIn');
-    // displayQuickMessage("Local login state cleared. Please login again.");
-    // startServerAuth(); // Or relaunchAssistant();
+  if (showWarning) {
+    const res = displayDialog({
+      type: 'warning',
+      message: 'Are you sure to reset the tokens?',
+      detail: 'After proceeding with the token reset, you will be directed to the "Get Token" screen for fetching new access tokens.',
+      buttons: [
+        'Proceed',
+        'Cancel',
+      ],
+      cancelId: 1,
+    });
+
+    if (res === 1) return;
+  }
+
+  const savedTokensFilePath = assistantConfig.savedTokensPath;
+  fs.unlinkSync(savedTokensFilePath);
+
+  if (showRelaunchScreen) {
+    displayErrorScreen({
+      icon: {
+        path: '../res/refresh.svg',
+        style: `
+          height: 100px;
+          animation: rotate_anim 600ms cubic-bezier(0.48, -0.4, 0.26, 1.3);
+          ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}
+        `,
+      },
+      title: 'Relaunch Required',
+      details: 'A relaunch is required for changes to take place',
+      subdetails: 'Info: Tokens file reset',
+    });
+
+    const suggestionParent = document.querySelector('.suggestion-parent');
+
+    suggestionParent.innerHTML = `
+      <div class="suggestion" onclick="relaunchAssistant()">
+        <span>
+          <img src="../res/refresh.svg" style="
+            height: 20px;
+            width: 20px;
+            vertical-align: top;
+            padding-right: 5px;
+            ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+          >
+        </span>
+        Relaunch Assistant
+      </div>
+    `;
+  }
 }
-*/
-// --- FIN MODIFICACIÓN ---
 
 /**
  * Returns a formatted message to be logged in console
@@ -3983,8 +5390,27 @@ function resetSavedTokensFile(showRelaunchScreen = true, showWarning = true) {
  * console.groupEnd();
  */
 function consoleMessage(message, type = 'info') {
-    // ... (código existente de consoleMessage) ...
-    return [ /* ... */ ];
+  let labelColor = '';
+
+  switch (type) {
+    case 'error':
+      labelColor = '#EA4335';
+      break;
+
+    case 'warn':
+      labelColor = '#E1A804';
+      break;
+
+    default:
+      labelColor = '#4285F4';
+      break;
+  }
+
+  return [
+    `%c[${type.toUpperCase()}]%c ${message}`,
+    `color: ${labelColor}`,
+    'color: unset',
+  ];
 }
 
 /**
@@ -4015,107 +5441,94 @@ function constrain(n, low, high) {
   return n;
 }
 
-// --- Event Listeners (código existente con chequeos añadidos) ---
+assistantMicrophone.onclick = startMic;
 
-if (assistantMicrophone) assistantMicrophone.onclick = startMic;
+assistantInput.addEventListener('keyup', (event) => {
+  if (event.keyCode === 13) {
+    assistantTextQuery(assistantInput.value);
+  }
+});
 
-if (assistantInput) {
-    assistantInput.addEventListener('keyup', (event) => {
-        if (event.keyCode === 13) {
-            assistantTextQuery(assistantInput.value);
+// Set Initial Screen
+
+document.querySelector('#init-loading').style.opacity = 0;
+
+setTimeout(() => {
+  setInitScreen();
+
+  if (
+    (assistantConfig.enableMicOnStartup || assistantWindowLaunchArgs.shouldStartMic)
+    && !firstLaunch
+  ) {
+    startMic();
+  }
+}, 200);
+
+/**
+ * Manage up/down keys in assistant input box.
+ * @param {KeyboardEvent} e
+ */
+assistantInput.onkeydown = (e) => {
+  switch (e.key) {
+    case 'ArrowUp':
+      if (queryHistoryHead > 0) {
+        queryHistoryHead--;
+        assistantInput.value = history[queryHistoryHead].query;
+      }
+
+      break;
+
+    case 'ArrowDown':
+      if (queryHistoryHead <= history.length - 1) {
+        queryHistoryHead++;
+
+        if (queryHistoryHead === history.length) {
+          assistantInput.value = currentTypedQuery;
         }
-    });
-
-    assistantInput.onkeydown = (e) => {
-        switch (e.key) {
-            case 'ArrowUp':
-                 // Ensure history exists and queryHistoryHead is valid
-                if (history && history.length > 0 && queryHistoryHead > 0) {
-                    queryHistoryHead--;
-                     // Check if history item and query exist
-                    assistantInput.value = history[queryHistoryHead]?.query || '';
-                }
-                break;
-            case 'ArrowDown':
-                 // Ensure history exists
-                if (history && queryHistoryHead <= history.length - 1) {
-                    queryHistoryHead++;
-                    if (queryHistoryHead === history.length) {
-                        assistantInput.value = currentTypedQuery;
-                    } else {
-                         // Check if history item and query exist
-                        assistantInput.value = history[queryHistoryHead]?.query || '';
-                    }
-                }
-                break;
-            default:
-                // no-op
+        else {
+          assistantInput.value = history[queryHistoryHead].query;
         }
-    };
+      }
 
-    assistantInput.oninput = (e) => {
-        if (mic?.isActive) stopMic(); // Optional chaining for mic
-        queryHistoryHead = history.length;
-        currentTypedQuery = e.target.value;
-    };
-}
+      break;
 
+    default:
+      // no-op
+  }
+};
 
-// Set Initial Screen Logic
-// --- MODIFICACIÓN: Mover la lógica de inicialización aquí después de definir funciones ---
-try {
-  document.querySelector('#init-loading').style.opacity = 0;
+/**
+ * Remember user's currently typed query and stops mic when
+ * user inputs some characters in the assistant input box.
+ *
+ * @param {InputEvent} e
+ */
+assistantInput.oninput = (e) => {
+  // Stop listening when user starts typing
+  if (mic.isActive) stopMic();
 
-  setTimeout(() => {
-    setInitScreen(); // Llama a la función actualizada
-
-    // --- MODIFICACIÓN: Condicionar startMic al estado de login ---
-    const isLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
-    if (
-      isLoggedIn && // Solo si está logueado
-      (assistantConfig.enableMicOnStartup || assistantWindowLaunchArgs.shouldStartMic) &&
-      !firstLaunch &&
-      initScreenFlag // Y no estamos en pantalla de auth
-    ) {
-      startMic();
-    } else if (!isLoggedIn && initScreenFlag) {
-         console.log("Initial mic start skipped: User not logged in.");
-         // No iniciar micro, setInitScreen ya debería haber mostrado el login si era necesario
-    }
-    // --- FIN MODIFICACIÓN ---
-
-  }, 200); // Delay como antes
-
-} catch (e) {
-    // Capturar errores durante la inicialización temprana (ej. First Time User, Auth Required)
-    console.warn("Initial setup halted:", e.message);
-    // La UI ya debería haberse configurado por el código que lanzó el error.
-    // Asegurarse que el loading se oculte si no lo hizo antes
-    const loadingElement = document.querySelector('#init-loading');
-    if(loadingElement) loadingElement.style.opacity = 0;
-}
-// --- FIN MODIFICACIÓN ---
-
+  queryHistoryHead = history.length;
+  currentTypedQuery = e.target.value;
+};
 
 // Auto-focus Assistant Input box when '/' is pressed
+
 window.onkeypress = (e) => {
   if (e.key === '/') {
-     // Ensure assistantInput exists
-    if (assistantInput && document.activeElement !== assistantInput && document.activeElement?.tagName !== 'INPUT') {
+    if (document.activeElement.tagName !== 'INPUT') {
       e.preventDefault();
       assistantInput.focus();
     }
   }
 };
 
-
 window.onkeydown = (e) => {
   if (document.querySelector('#config-screen')) {
-     const hotkeyBar = document.querySelector('#hotkey-div');
-     // Check if hotkeyBar exists before accessing classList
-     if (hotkeyBar?.classList.contains('input-active')) {
-       return;
-     }
+    const isHotkeyBarActive = document.querySelector('#hotkey-div');
+
+    if (isHotkeyBarActive.classList.contains('input-active')) {
+      return;
+    }
   }
 
   if (e.key === 'Escape') {
@@ -4130,6 +5543,7 @@ window.onkeydown = (e) => {
 };
 
 // Change theme when system theme changes
+
 window.matchMedia('(prefers-color-scheme: light)').onchange = (e) => {
   if (assistantConfig.theme === 'system') {
     if (e.matches) {
@@ -4143,9 +5557,8 @@ window.matchMedia('(prefers-color-scheme: light)').onchange = (e) => {
 
 // Listen for 'mic start' request from main process
 ipcRenderer.on('request-mic-toggle', () => {
-   // Check mic exists before accessing isActive
-  if (mic?.isActive) {
-    if (audPlayer) audPlayer.playPingStop(); // Check audPlayer exists
+  if (mic.isActive) {
+    audPlayer.playPingStop();
     stopMic();
   }
   else {
@@ -4153,7 +5566,8 @@ ipcRenderer.on('request-mic-toggle', () => {
   }
 });
 
-// Stop mic and audio before closing window from main process.
+// Stop mic and audio before closing window from main
+// process.
 ipcRenderer.on('window-will-close', () => {
   stopAudioAndMic();
 });
