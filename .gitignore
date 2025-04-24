@@ -9,3 +9,4 @@ yarn.lock
 .npm
 .vscode/
 .idea/workspace.xml
+.idx/

@@ -12,6 +12,10 @@
     # pkgs.nodejs_20
     # pkgs.nodePackages.nodemon
     pkgs.sudo
+    pkgs.apt
+    pkgs.rpm
+    pkgs.python3
+    pkgs.gnumake
   ];
 
   # Sets environment variables in the workspace
